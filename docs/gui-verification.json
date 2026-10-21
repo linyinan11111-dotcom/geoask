@@ -1,0 +1,62 @@
+{
+  "ui_ticks": 309,
+  "stops": [
+    "星巴克",
+    "嘉里健身"
+  ],
+  "route_m": 1539.0,
+  "route_s": 1201.475,
+  "real_map_tiles": 20,
+  "route_geometry_points": 25,
+  "reselect_and_reroute_ok": true,
+  "preview_ok": true,
+  "compact_layout_ok": true,
+  "manual_and_map_origin_ok": true,
+  "named_destination": {
+    "query": "我想去鸟巢看演唱会",
+    "llm": "fixed regression response; no paid API call",
+    "resolved_name": "国家体育场",
+    "coordinates": [
+      116.39028641782102,
+      39.99140405
+    ],
+    "straight_distance_m": 9916.78630325089,
+    "nearby_radius_m": 1000.0,
+    "real_road_distance_m": 12685.0,
+    "route_s": 9698.639,
+    "geometry_points": 275
+  },
+  "parking_navigation": {
+    "source": "real bundled Beijing OSM traffic layers",
+    "parking": {
+      "name": "",
+      "category": "parking",
+      "dist_m": 326.15878907817626,
+      "longitude": 116.39386132020961,
+      "latitude": 39.9903708
+    },
+    "destination": "国家体育场",
+    "mode": "driving",
+    "road_m": 13513.0,
+    "road_s": 1375.719,
+    "geometry_points": 165
+  },
+  "parking_empty_and_disable_ok": true,
+  "regional_import": {
+    "source": "synthetic Guangzhou fixture; not a published POI dataset",
+    "alias": "小蛮腰",
+    "resolved_name": "广州塔",
+    "coordinates": [
+      113.3245,
+      23.1065
+    ],
+    "without_category": true,
+    "old_trip_cleared": true,
+    "beijing_catalog_cleared": true,
+    "llm": "fixed regression response; no paid API call"
+  },
+  "error_recovery_ok": true,
+  "settings_dialog_ok": true,
+  "map_settings_tab_ok": true,
+  "passed": true
+}

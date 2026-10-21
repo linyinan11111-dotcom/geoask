@@ -1,0 +1,35 @@
+{
+  "source_url": "https://download.geofabrik.de/asia/china/beijing-261020-free.gpkg.zip",
+  "source_date": "2026-10-20",
+  "layers": [
+    "gis_osm_pois_free",
+    "gis_osm_pois_a_free",
+    "gis_osm_transport_free",
+    "gis_osm_traffic_free",
+    "gis_osm_traffic_a_free"
+  ],
+  "source_archive_sha256": "fe023075f9f587f8d6bcb58a48f9bc00bf5f487f7ab78334d93dd75899c3199b",
+  "catalog_sha256": "b6d19a945409b14c7d68c3229bf2aaf022ac5309a288fe251d63dd72b0425b3c",
+  "rows": 29131,
+  "bytes": 4456448,
+  "crs": "EPSG:4326",
+  "selection": "Named Beijing POI points/polygons and transport, plus unnamed parking; excluding bus_stop/taxi; deduplicated by osm_id/name",
+  "scope": "Explicit destination names and optional nearby parking; nearby-category queries still use geojson_path",
+  "parking_categories": {
+    "parking": 4776
+  },
+  "polygon_policy": "ST_PointOnSurface; not a verified entrance",
+  "verified_alias": {
+    "鸟巢": {
+      "canonical_name": "国家体育场",
+      "osm_id": "152301551",
+      "category": "stadium",
+      "coordinate": [
+        116.39028641782102,
+        39.99140405
+      ]
+    }
+  },
+  "attribution": "© OpenStreetMap contributors; Geofabrik",
+  "license": "ODbL-1.0"
+}

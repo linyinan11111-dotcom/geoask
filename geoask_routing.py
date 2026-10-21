@@ -1,0 +1,105 @@
+"""Real road routing through a configurable Valhalla HTTP API (WGS84)."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import math
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+import geoask as g
+
+MODES = {"walking": "pedestrian", "cycling": "bicycle", "driving": "auto"}
+MODE_NAMES = {"walking": "步行", "cycling": "骑行", "driving": "驾车"}
+
+
+@dataclass(frozen=True)
+class RouteLeg:
+    distance_m: float
+    duration_s: float
+    instructions: list[str]
+
+
+@dataclass(frozen=True)
+class RoadRoute:
+    coordinates: list[tuple[float, float]]
+    legs: list[RouteLeg]
+    distance_m: float
+    duration_s: float
+    travel_mode: str
+    provider: str = "Valhalla / OpenStreetMap"
+
+
+def decode_polyline(shape: str, precision: int = 6) -> list[tuple[float, float]]:
+    """Decode Valhalla's six-decimal polyline into longitude/latitude pairs."""
+    cursor, lat, lon, points = 0, 0, 0, []
+    while cursor < len(shape):
+        deltas = []
+        for _ in range(2):
+            shift, result = 0, 0
+            while True:
+                if cursor >= len(shape) or shift > 30:
+                    raise ValueError("Invalid encoded route geometry")
+                byte = ord(shape[cursor]) - 63
+                cursor += 1
+                if not 0 <= byte <= 63:
+                    raise ValueError("Invalid encoded route geometry")
+                result |= (byte & 31) << shift
+                shift += 5
+                if byte < 32:
+                    break
+            deltas.append(~(result >> 1) if result & 1 else result >> 1)
+        lat += deltas[0]
+        lon += deltas[1]
+        point = lon / 10**precision, lat / 10**precision
+        g.validate_location(*point)
+        points.append(point)
+    return points
+
+
+def parse_route_response(payload: dict, travel_mode: str, expected_legs: int) -> RoadRoute:
+    try:
+        trip = payload["trip"]
+        if trip.get("status", 0) != 0 or len(trip["legs"]) != expected_legs:
+            raise ValueError("Incomplete route")
+        coordinates, legs = [], []
+        for leg in trip["legs"]:
+            shape = decode_polyline(leg["shape"])
+            if len(shape) < 2:
+                raise ValueError("Empty route geometry")
+            coordinates.extend(shape[1:] if coordinates and coordinates[-1] == shape[0] else shape)
+            distance = float(leg["summary"]["length"]) * 1000
+            duration = float(leg["summary"]["time"])
+            if not all(math.isfinite(x) and x >= 0 for x in (distance, duration)):
+                raise ValueError("Invalid route summary")
+            legs.append(RouteLeg(distance, duration, [str(m["instruction"]) for m in leg.get("maneuvers", []) if m.get("instruction")]))
+        return RoadRoute(coordinates, legs, sum(l.distance_m for l in legs),
+                         sum(l.duration_s for l in legs), travel_mode)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise g.GeoaskError("路线接口未返回完整、有效的道路路线，请更换地点或出行方式重试。") from exc
+
+
+def plan_road_route(points: list[tuple[float, float]], travel_mode: str,
+                    settings: g.RoutingSettings, opener=None) -> RoadRoute:
+    if travel_mode not in MODES or not 2 <= len(points) <= 7:
+        raise g.GeoaskError("路线需要起点和 1–6 个目的地，出行方式为步行、骑行或驾车。")
+    for point in points:
+        g.validate_location(*point)
+    payload = {"locations": [{"lon": lon, "lat": lat, "type": "break"} for lon, lat in points],
+               "costing": MODES[travel_mode], "units": "kilometers", "language": "zh-CN"}
+    # Public and self-hosted Valhalla endpoints support the documented JSON query parameter.
+    joiner = "&" if "?" in settings.endpoint else "?"
+    url = settings.endpoint + joiner + urlencode({"json": json.dumps(payload, separators=(",", ":"))})
+    request = Request(url, headers={"User-Agent": "geoask/0.2 (desktop routing)", "Accept": "application/json"})
+    try:
+        with (opener or urlopen)(request, timeout=settings.timeout_seconds) as response:
+            raw = response.read(5_000_001)
+        if len(raw) > 5_000_000:
+            raise ValueError("Response too large")
+        data = json.loads(raw)
+    except HTTPError as exc:
+        raise g.GeoaskError(f"路线服务返回 HTTP {exc.code}，请稍后重试或更换路线接口。地点选择已保留。") from exc
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        raise g.GeoaskError("无法连接路线服务或响应无效。地点选择已保留，可稍后重新规划。") from exc
+    return parse_route_response(data, travel_mode, len(points) - 1)

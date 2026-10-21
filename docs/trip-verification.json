@@ -1,0 +1,32 @@
+{
+  "llm": "fixed demo intent",
+  "poi_data": "real bundled OSM",
+  "stops": [
+    {
+      "intent": "咖啡",
+      "selected": {
+        "name": "星巴克",
+        "category": "cafe",
+        "dist_m": 786.3035184889225,
+        "longitude": 116.4541871,
+        "latitude": 39.9145122
+      }
+    },
+    {
+      "intent": "健身",
+      "selected": {
+        "name": "嘉里健身",
+        "category": "fitness_centre",
+        "dist_m": 253.4270060060659,
+        "longitude": 116.4526147,
+        "latitude": 39.9125774
+      }
+    }
+  ],
+  "route_provider": "Valhalla / OpenStreetMap",
+  "mode": "walking",
+  "distance_m": 1539.0,
+  "duration_s": 1201.475,
+  "legs": 2,
+  "geometry_points": 25
+}

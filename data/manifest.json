@@ -1,0 +1,35 @@
+{
+  "source_url": "https://download.geofabrik.de/asia/china/beijing-261020-free.gpkg.zip",
+  "source_date": "2026-10-20",
+  "archive_sha256": "fe023075f9f587f8d6bcb58a48f9bc00bf5f487f7ab78334d93dd75899c3199b",
+  "subset_sha256": "4b1707a70d20e7d653cabace190e3b0377b364e7d988f3a3b1f534ec267528ff",
+  "bbox_wgs84": [
+    116.44,
+    39.904,
+    116.48,
+    39.936
+  ],
+  "center_wgs84": [
+    116.46,
+    39.92
+  ],
+  "rows": 415,
+  "named_rows": 307,
+  "categories": {
+    "cafe": 88,
+    "fitness_centre": 14,
+    "park": 21,
+    "railway_station": 12,
+    "restaurant": 258,
+    "supermarket": 22
+  },
+  "layers": [
+    "gis_osm_pois_free",
+    "gis_osm_pois_a_free",
+    "gis_osm_transport_free"
+  ],
+  "polygon_policy": "ST_PointOnSurface; distances to representative point, not entrance",
+  "attribution": "© OpenStreetMap contributors; Geofabrik",
+  "license": "ODbL-1.0",
+  "license_url": "https://opendatacommons.org/licenses/odbl/1-0/"
+}

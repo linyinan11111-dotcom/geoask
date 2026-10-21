@@ -1,0 +1,58 @@
+# 路径相对于本配置文件，不依赖运行命令时的目录。
+geojson_path: data/beijing_poi.gpkg
+layer: poi
+field_mapping:
+  name: name
+  category: fclass
+  geometry: geom
+source_crs: EPSG:4326
+default_location: [116.46, 39.92]  # 北京国贸周边，WGS84 经度、纬度
+default_radius: 1000
+limit: 10
+
+# 英文单语 bge-small-en 不能可靠完成中文 -> 英文的类别映射。
+embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+category_similarity_threshold: 0.60
+category_margin_threshold: 0.03
+cache_dir: .cache
+
+# 指定目的地按名称检索整个北京地名目录，不受“附近类别”的半径限制。
+# 自定义数据可设为 null；别名应按该区域核实，不由 LLM 生成坐标。
+place_catalog_path: data/beijing_places.gpkg
+# 改用其他 POI 文件时，自动停用这份北京补充目录及其别名，避免跨地区混用。
+place_catalog_for: data/beijing_poi.gpkg
+place_aliases:
+  鸟巢: 国家体育场
+
+# WGS84 / Web Mercator 底图；可换成其他兼容 XYZ 瓦片服务。
+map:
+  tile_url: https://tile.openstreetmap.org/{z}/{x}/{y}.png
+  attribution: © OpenStreetMap contributors
+  user_agent: geoask/0.2 (local desktop nearby search)
+
+# Valhalla 接口：支持真实步行、骑行和驾车路线；可换成自部署实例。
+routing:
+  endpoint: https://valhalla1.openstreetmap.de/route
+  timeout_seconds: 20
+
+# 可选停车导航：仅使用当前地区数据中这些类别的地点，不调用 LLM 猜测停车场。
+parking:
+  categories: [parking, parking_underground, parking_multistorey, 停车场]
+  radius: 1000
+
+# LLM 接口：只解析意图。密钥放环境变量，切勿写入本文件。
+llm:
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+  response_format: json_object  # DeepSeek JSON 模式 + 本地 Pydantic 严格校验
+  timeout_seconds: 30
+
+# 若使用 OpenAI，替换 llm 为：
+# llm:
+#   base_url: https://api.openai.com/v1
+#   model: gpt-4o-mini
+#   api_key_env: OPENAI_API_KEY
+#   response_format: structured
+#   timeout_seconds: 30
+# 本地兼容接口同样修改 base_url/model/api_key_env；密钥可使用本地服务要求的占位值。

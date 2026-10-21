@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geoask"
+version = "0.2.0"
+description = "Natural-language nearby search with local embeddings and DuckDB spatial"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[project.scripts]
+geoask = "geoask:cli"
+
+[project.gui-scripts]
+geoask-gui = "geoask_gui:main"
+
+[tool.setuptools]
+py-modules = ["geoask", "geoask_service", "geoask_gui", "geoask_map", "geoask_location", "geoask_routing", "geoask_places", "geoask_data", "geoask_parking"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: real local embedding model or bundled spatial data"]
