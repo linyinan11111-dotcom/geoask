@@ -68,7 +68,8 @@ def _distance_m(a, b):
     return 6371008.8 * 2 * math.asin(math.sqrt(h))
 
 
-def search_places(query, center, radius, limit, settings: g.AmapSettings, api_key, opener=None):
+def search_places(query, center, radius, limit, settings: g.AmapSettings, api_key,
+                  opener=None, security_code=""):
     """Return Amap POIs in the same row shape as local name searches."""
     if not api_key or not settings.enabled:
         return []
@@ -82,6 +83,8 @@ def search_places(query, center, radius, limit, settings: g.AmapSettings, api_ke
         "output": "json",
         "show_fields": "business",
     }
+    if security_code:
+        params["jscode"] = security_code
     if settings.region:
         params["region"] = settings.region
     request = Request(settings.endpoint + "?" + urlencode(params),

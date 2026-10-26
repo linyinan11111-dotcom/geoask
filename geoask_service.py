@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field, replace
-import os
 from pathlib import Path
 from typing import Callable
 import hashlib
@@ -17,8 +16,9 @@ def _amap_search(query, center, radius, limit, settings):
     if not settings.amap.enabled:
         return []
     from geoask_amap import search_places
+    api_key, security_code = g.resolve_amap_credentials(settings.amap)
     return search_places(query, center, radius, limit, settings.amap,
-                         os.getenv(settings.amap.api_key_env, "").strip())
+                         api_key, security_code=security_code)
 
 
 @dataclass(frozen=True)

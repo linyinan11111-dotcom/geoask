@@ -96,16 +96,17 @@ parking:
 
 默认配置底图为高德地图，路线为 [Valhalla 公共实例](https://valhalla1.openstreetmap.de/)，高德 POI 需要 Web 服务 Key、均需要网络。公共服务可能限流或不可用；可在“接口设置 → 地图与路径 API”替换并保存兼容服务，或修改配置：
 
-本项目也支持高德 Web 服务作为在线 POI 兜底。当本地 GPKG 没有匹配地点时，若配置中的 `amap.enabled` 为 `true` 且设置了 `AMAP_WEB_KEY`，程序会用高德关键词搜索并把候选显示为“高德地图”，仍需用户确认后才能规划路线。高德 Key 只从环境变量读取，不写入 YAML、地区导出或 Git：
+本项目也支持高德 Web 服务作为在线 POI 兜底。当本地 GPKG 没有匹配地点时，若配置中的 `amap.enabled` 为 `true` 且能取得高德凭据，程序会用高德关键词搜索并把候选显示为“高德地图”，仍需用户确认后才能规划路线。凭据优先从环境变量读取，也可以在 Windows 当前用户的本地接口设置中保存；保存内容使用 DPAPI 加密，不写入 YAML、地区导出或 Git：
 
 ```yaml
 amap:
   enabled: true
   endpoint: https://restapi.amap.com/v5/place/text
   api_key_env: AMAP_WEB_KEY
+  security_code_env: AMAP_SECURITY_CODE
 ```
 
-Windows PowerShell 示例：`$env:AMAP_WEB_KEY = "你的高德 Web 服务 Key"`。高德返回的是 GCJ-02 坐标，geoask 会转换为 WGS84 后再显示和计算距离。没有 Key、网络不可用或高德没有结果时，程序仍会保留本地数据结果，不会伪造地点。
+Windows PowerShell 示例：`$env:AMAP_WEB_KEY = "你的高德 Web 服务 Key"`、`$env:AMAP_SECURITY_CODE = "你的安全 Code"`。也可在 GUI 的“接口设置”中保存；高德返回的是 GCJ-02 坐标，geoask 会转换为 WGS84 后再显示和计算距离。没有凭据、网络不可用或高德没有结果时，程序仍会保留本地数据结果，不会伪造地点。
 
 ```yaml
 map:

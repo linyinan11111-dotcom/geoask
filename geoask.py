@@ -20,7 +20,7 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from geoask_resources import resource_file, __version__
 from geoask_runtime import atomic_output, get_logger, user_cache_dir
-from geoask_credentials import saved_api_key, LocalSettingsError
+from geoask_credentials import saved_api_key, saved_amap_credentials, LocalSettingsError
 
 ROOT = Path(__file__).resolve().parent
 SOURCE_CONFIG = ROOT / "config.yaml"
@@ -79,6 +79,7 @@ class AmapSettings(BaseModel):
     enabled: bool = False
     endpoint: str = "https://restapi.amap.com/v5/place/text"
     api_key_env: str = "AMAP_WEB_KEY"
+    security_code_env: str = "AMAP_SECURITY_CODE"
     timeout_seconds: float = Field(default=12, gt=0, le=60)
     region: str | None = None
 
@@ -96,6 +97,13 @@ class AmapSettings(BaseModel):
     def valid_api_key_env(cls, value):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", value or ""):
             raise ValueError("高德 Key 环境变量名无效。")
+        return value
+
+    @field_validator("security_code_env")
+    @classmethod
+    def valid_security_code_env(cls, value):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", value or ""):
+            raise ValueError("高德安全 Code 环境变量名无效。")
         return value
 
 
@@ -359,6 +367,23 @@ def resolve_api_key(settings: LLMSettings) -> str:
         return saved_api_key(settings.model_dump())
     except LocalSettingsError as exc:
         raise GeoaskError(str(exc)) from exc
+
+
+def resolve_amap_credentials(settings: AmapSettings) -> tuple[str, str]:
+    """Resolve Amap credentials without putting secrets in project settings.
+
+    Environment variables are useful for CI and one-off runs; the encrypted
+    per-user profile is the normal desktop fallback.
+    """
+    key = os.getenv(settings.api_key_env, "").strip()
+    code = os.getenv(settings.security_code_env, "").strip()
+    if key and code:
+        return key, code
+    try:
+        local_key, local_code = saved_amap_credentials()
+    except LocalSettingsError as exc:
+        raise GeoaskError(str(exc)) from exc
+    return key or local_key, code or local_code
 
 
 def parse_intent(query: str, settings: LLMSettings, client=None) -> GeoIntent:
@@ -680,8 +705,9 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
                                                  intent.place_candidates)
             if not results and settings.amap.enabled:
                 from geoask_amap import search_places
+                amap_key, amap_code = resolve_amap_credentials(settings.amap)
                 results = search_places(intent.place_name, center, radius, limit, settings.amap,
-                                        os.getenv(settings.amap.api_key_env, "").strip())
+                                        amap_key, security_code=amap_code)
             click.echo(f"结果 ({len(results)} 条):")
             for i, row in enumerate(results, 1):
                 click.echo(f"  {i}. {row['name']}  [{row['category']}]  {row['dist_m']:.0f}m")
@@ -716,8 +742,9 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
             fallback_results = search_place_with_variants(con, intent.intent, center, limit, settings)
             if not fallback_results and settings.amap.enabled:
                 from geoask_amap import search_places
+                amap_key, amap_code = resolve_amap_credentials(settings.amap)
                 fallback_results = search_places(intent.intent, center, radius, limit, settings.amap,
-                                                 os.getenv(settings.amap.api_key_env, "").strip())
+                                                 amap_key, security_code=amap_code)
             if fallback_results:
                 click.echo(f"类别匹配不足，已按名称/关键词“{intent.intent}”搜索。")
                 click.echo(f"结果 ({len(fallback_results)} 条):")
@@ -738,8 +765,9 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         results = search(con, match.query_category, center, radius, limit)
         if not results and settings.amap.enabled:
             from geoask_amap import search_places
+            amap_key, amap_code = resolve_amap_credentials(settings.amap)
             results = search_places(intent.intent, center, radius, limit, settings.amap,
-                                    os.getenv(settings.amap.api_key_env, "").strip())
+                                    amap_key, security_code=amap_code)
         click.echo(f"结果 ({len(results)} 条):")
         for i, row in enumerate(results, 1):
             click.echo(f"  {i}. {row['name'] or '(未命名地点)'}  [{row['category']}]  {row['dist_m']:.0f}m")

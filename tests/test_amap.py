@@ -35,6 +35,18 @@ def test_amap_poi_response_is_normalized_and_key_is_only_in_request():
     assert seen["keywords"] == ["洗浴中心"]
 
 
+def test_amap_security_code_is_sent_as_jscode():
+    seen = {}
+
+    def opener(request, timeout):
+        seen.update(parse_qs(urlsplit(request.full_url).query))
+        return Response(json.dumps({"status": "1", "count": "0", "pois": []}).encode())
+
+    search_places("洗浴中心", (116.46, 39.92), 1000, 10,
+                  g.AmapSettings(enabled=True), "key", opener, "security-code")
+    assert seen["jscode"] == ["security-code"]
+
+
 def test_amap_disabled_does_not_make_request():
     called = False
 

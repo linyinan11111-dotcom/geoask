@@ -31,11 +31,12 @@ map:
   user_agent: geoask/0.2 (local desktop nearby search)
   coordinate_system: gcj02
 
-# 可选高德 POI 在线兜底。本地数据没有结果时才查询；Key 只从环境变量读取。
+# 可选高德 POI 在线兜底。本地数据没有结果时才查询；凭据从环境变量或本机加密配置读取。
 amap:
   enabled: true
   endpoint: https://restapi.amap.com/v5/place/text
   api_key_env: AMAP_WEB_KEY
+  security_code_env: AMAP_SECURITY_CODE
   timeout_seconds: 12
   # region: 北京
 

@@ -77,6 +77,15 @@ def _validate(payload):
            ("base_url", "model", "api_key_env", "response_format")):
         raise ValueError("invalid model settings")
     _identity(llm)
+    amap = payload.get("amap", {})
+    if amap is None:
+        amap = {}
+        payload["amap"] = amap
+    if not isinstance(amap, dict):
+        raise ValueError("invalid amap profile")
+    for key in ("key", "security_code"):
+        if key in amap and not isinstance(amap[key], str):
+            raise ValueError("invalid amap credential")
     return payload
 
 
@@ -108,9 +117,26 @@ def load_connection():
         raise LocalSettingsError("无法读取本地接口设置；请在“接口设置”中清除本地保存后重新填写。") from from_exc
 
 
-def save_connection(llm: dict, maps: dict, routing: dict, api_key: str):
+def save_connection(llm: dict, maps: dict, routing: dict, api_key: str,
+                    amap_key: str | None = None,
+                    amap_security_code: str | None = None):
     try:
-        payload = _validate(dict(version=1, llm=llm, map=maps, routing=routing, api_key=api_key.strip()))
+        # Keep credentials that were saved by an earlier version when callers
+        # only update the LLM/map form. Passing an empty string explicitly
+        # clears the corresponding Amap value.
+        existing = None
+        if amap_key is None or amap_security_code is None:
+            try:
+                existing = load_connection()
+            except LocalSettingsError:
+                existing = None
+        old_amap = dict((existing or {}).get("amap") or {})
+        amap = {
+            "key": old_amap.get("key", "") if amap_key is None else amap_key.strip(),
+            "security_code": old_amap.get("security_code", "") if amap_security_code is None else amap_security_code.strip(),
+        }
+        payload = _validate(dict(version=1, llm=llm, map=maps, routing=routing,
+                                 api_key=api_key.strip(), amap=amap))
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         data = _DPAPI + _crypt(raw) if _WINDOWS else _JSON + raw
         path = connection_file()
@@ -140,3 +166,12 @@ def saved_api_key(llm: dict) -> str:
     profile = load_connection()
     # A key is never reused for a different provider, path or environment name.
     return profile["api_key"] if profile and same_connection(profile["llm"], llm) else ""
+
+
+def saved_amap_credentials() -> tuple[str, str]:
+    """Return the locally saved Amap Web key and security code, if present."""
+    profile = load_connection()
+    if not profile:
+        return "", ""
+    amap = profile.get("amap") or {}
+    return str(amap.get("key") or ""), str(amap.get("security_code") or "")

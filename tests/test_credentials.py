@@ -30,6 +30,27 @@ def test_roundtrip_and_clear():
     assert credentials.load_connection() is None
 
 
+def test_amap_credentials_roundtrip_and_legacy_profile_compatibility():
+    llm = g.LLMSettings()
+    credentials.save_connection(llm.model_dump(), g.MapSettings().model_dump(),
+                                g.RoutingSettings().model_dump(), "llm-secret",
+                                "amap-secret", "amap-code")
+    assert credentials.saved_amap_credentials() == ("amap-secret", "amap-code")
+    if credentials._WINDOWS:
+        raw = credentials.connection_file().read_bytes()
+        assert b"amap-secret" not in raw and b"amap-code" not in raw
+    # A profile written before Amap support remains readable and yields blanks.
+    profile = credentials.load_connection()
+    profile.pop("amap", None)
+    raw = json.dumps(profile, ensure_ascii=False).encode()
+    if credentials._WINDOWS:
+        raw = credentials._DPAPI + credentials._crypt(raw)
+    else:
+        raw = credentials._JSON + raw
+    credentials.connection_file().write_bytes(raw)
+    assert credentials.saved_amap_credentials() == ("", "")
+
+
 def test_new_process_can_decrypt_same_user_profile():
     llm = save()
     code = "import sys; from pathlib import Path; import geoask_credentials as c; c.connection_file=lambda:Path(sys.argv[1]); p=c.load_connection(); assert p['api_key']=='test-only-local-secret'; print('restored')"
