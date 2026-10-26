@@ -109,7 +109,7 @@ Windows PowerShell 示例：`$env:AMAP_WEB_KEY = "你的高德 Web 服务 Key"`�
 
 ```yaml
 map:
-  tile_url: https://webrd0.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}
+  tile_url: https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}
   attribution: © 高德地图
   user_agent: geoask/0.2 (local desktop nearby search)
   coordinate_system: gcj02
