@@ -45,6 +45,22 @@ def gcj02_to_wgs84(lon, lat):
     return lon - dlon, lat - dlat
 
 
+def wgs84_to_gcj02(lon, lat):
+    """Convert WGS84 coordinates to the GCJ-02 grid used by Amap tiles."""
+    if _out_of_china(lon, lat):
+        return lon, lat
+    a, ee = 6378245.0, 0.00669342162296594323
+    dlat = _transform_lat(lon - 105.0, lat - 35.0)
+    dlon = _transform_lon(lon - 105.0, lat - 35.0)
+    rad = lat / 180.0 * math.pi
+    magic = math.sin(rad)
+    magic = 1 - ee * magic * magic
+    sqrt_magic = math.sqrt(magic)
+    dlat = dlat * 180.0 / ((a * (1 - ee)) / (magic * sqrt_magic) * math.pi)
+    dlon = dlon * 180.0 / (a / sqrt_magic * math.cos(rad) * math.pi)
+    return lon + dlon, lat + dlat
+
+
 def _distance_m(a, b):
     lon1, lat1, lon2, lat2 = map(math.radians, (*a, *b))
     dlon, dlat = lon2 - lon1, lat2 - lat1

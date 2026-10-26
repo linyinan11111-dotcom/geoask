@@ -57,6 +57,7 @@ class MapSettings(BaseModel):
     tile_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     attribution: str = "© OpenStreetMap contributors"
     user_agent: str = f"geoask/{__version__} (local desktop nearby search)"
+    coordinate_system: Literal["wgs84", "gcj02"] = "wgs84"
 
     @field_validator("tile_url")
     @classmethod

@@ -145,6 +145,18 @@ class SlippyMap(tk.Canvas):
             self.zoom = max(2, min(19, int(zoom)))
         self.redraw()
 
+    def _map_point(self, lon, lat):
+        if getattr(self.settings, "coordinate_system", "wgs84") == "gcj02":
+            from geoask_amap import wgs84_to_gcj02
+            return wgs84_to_gcj02(lon, lat)
+        return lon, lat
+
+    def _wgs_point(self, lon, lat):
+        if getattr(self.settings, "coordinate_system", "wgs84") == "gcj02":
+            from geoask_amap import gcj02_to_wgs84
+            return gcj02_to_wgs84(lon, lat)
+        return lon, lat
+
     def fit(self, points):
         if not points:
             return
@@ -153,29 +165,32 @@ class SlippyMap(tk.Canvas):
         anchor = points[0][0]
         normalized = [(anchor + math.remainder(lon-anchor, 360), lat) for lon, lat in points]
         max_zoom = 15 if len(set(points)) == 1 else 18
+        map_point = getattr(self, "_map_point", lambda lon, lat: (lon, lat))
+        wgs_point = getattr(self, "_wgs_point", lambda lon, lat: (lon, lat))
         for zoom in range(max_zoom, 1, -1):
-            pixels = [world_pixel(lon, lat, zoom) for lon, lat in normalized]
+            pixels = [world_pixel(*map_point(lon, lat), zoom) for lon, lat in normalized]
             xs, ys = [p[0] for p in pixels], [p[1] for p in pixels]
             if max(xs)-min(xs) < width-120 and max(ys)-min(ys) < height-100:
-                lon, lat = pixel_coordinate((min(xs)+max(xs))/2, (min(ys)+max(ys))/2, zoom)
+                lon, lat = wgs_point(*pixel_coordinate((min(xs)+max(xs))/2, (min(ys)+max(ys))/2, zoom))
                 self.set_center(lon, lat, zoom)
                 return
         self.set_center(*points[0], zoom=2)
 
     def screen_point(self, lon, lat):
-        x, y = world_pixel(lon, lat, self.zoom)
-        cx, cy = world_pixel(*self.center, self.zoom)
+        map_point = getattr(self, "_map_point", lambda x, y: (x, y))
+        x, y = world_pixel(*map_point(lon, lat), self.zoom)
+        cx, cy = world_pixel(*map_point(*self.center), self.zoom)
         size = 256 * 2**self.zoom
         dx = (x-cx+size/2) % size-size/2
         return self.winfo_width()/2+dx, self.winfo_height()/2+y-cy
 
     def _press(self, event):
-        self._drag = (event.x, event.y, *world_pixel(*self.center, self.zoom))
+        self._drag = (event.x, event.y, *world_pixel(*self._map_point(*self.center), self.zoom))
 
     def _move(self, event):
         if self._drag:
             x, y, cx, cy = self._drag
-            self.center = pixel_coordinate(cx-event.x+x, cy-event.y+y, self.zoom)
+            self.center = self._wgs_point(*pixel_coordinate(cx-event.x+x, cy-event.y+y, self.zoom))
             self.redraw()
 
     def _release(self, event):
@@ -187,20 +202,20 @@ class SlippyMap(tk.Canvas):
 
     def _position(self, event):
         if self.on_position:
-            cx, cy = world_pixel(*self.center, self.zoom)
-            self.on_position(*pixel_coordinate(cx+event.x-self.winfo_width()/2,
-                                               cy+event.y-self.winfo_height()/2, self.zoom))
+            cx, cy = world_pixel(*self._map_point(*self.center), self.zoom)
+            self.on_position(*self._wgs_point(*pixel_coordinate(cx+event.x-self.winfo_width()/2,
+                                                                  cy+event.y-self.winfo_height()/2, self.zoom)))
 
     def zoom_at(self, direction, x=None, y=None):
         zoom = max(2, min(19, self.zoom+direction))
         if zoom == self.zoom:
             return
         x, y = (self.winfo_width()/2 if x is None else x), (self.winfo_height()/2 if y is None else y)
-        cx, cy = world_pixel(*self.center, self.zoom)
+        cx, cy = world_pixel(*self._map_point(*self.center), self.zoom)
         factor = 2**(zoom-self.zoom)
         px = (cx+x-self.winfo_width()/2)*factor-x+self.winfo_width()/2
         py = (cy+y-self.winfo_height()/2)*factor-y+self.winfo_height()/2
-        self.center, self.zoom = pixel_coordinate(px, py, zoom), zoom
+        self.center, self.zoom = self._wgs_point(*pixel_coordinate(px, py, zoom)), zoom
         self.redraw()
 
     def redraw(self):
@@ -210,7 +225,7 @@ class SlippyMap(tk.Canvas):
         width, height = self.winfo_width(), self.winfo_height()
         if width < 10 or height < 10:
             return
-        cx, cy = world_pixel(*self.center, self.zoom)
+        cx, cy = world_pixel(*self._map_point(*self.center), self.zoom)
         left, top = cx-width/2, cy-height/2
         n = 2**self.zoom
         for tx in range(math.floor(left/256), math.floor((left+width)/256)+1):

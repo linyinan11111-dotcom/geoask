@@ -94,7 +94,7 @@ parking:
 
 ### 地图与路线 API
 
-默认底图为 [OpenStreetMap Standard](https://tile.openstreetmap.org/)，路线为 [Valhalla 公共实例](https://valhalla1.openstreetmap.de/)，均免 API Key、需要网络。公共服务可能限流或不可用；可在“接口设置 → 地图与路径 API”替换并保存兼容服务，或修改配置：
+默认配置底图为高德地图，路线为 [Valhalla 公共实例](https://valhalla1.openstreetmap.de/)，高德 POI 需要 Web 服务 Key、均需要网络。公共服务可能限流或不可用；可在“接口设置 → 地图与路径 API”替换并保存兼容服务，或修改配置：
 
 本项目也支持高德 Web 服务作为在线 POI 兜底。当本地 GPKG 没有匹配地点时，若配置中的 `amap.enabled` 为 `true` 且设置了 `AMAP_WEB_KEY`，程序会用高德关键词搜索并把候选显示为“高德地图”，仍需用户确认后才能规划路线。高德 Key 只从环境变量读取，不写入 YAML、地区导出或 Git：
 
@@ -109,15 +109,16 @@ Windows PowerShell 示例：`$env:AMAP_WEB_KEY = "你的高德 Web 服务 Key"`�
 
 ```yaml
 map:
-  tile_url: https://tile.openstreetmap.org/{z}/{x}/{y}.png
-  attribution: © OpenStreetMap contributors
+  tile_url: https://webrd0.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}
+  attribution: © 高德地图
   user_agent: geoask/0.2 (local desktop nearby search)
+  coordinate_system: gcj02
 routing:
   endpoint: https://valhalla1.openstreetmap.de/route
   timeout_seconds: 20
 ```
 
-底图接口要求 256×256 XYZ、Web Mercator / WGS84。未经坐标适配不能直接套用高德 GCJ-02 或百度 BD-09 底图，否则与 WGS84 POI 错位。路径接口为 Valhalla 格式，`walking/cycling/driving` 分别映射到 `pedestrian/bicycle/auto`。可自部署 Valhalla；其他厂商路径 API 需实现独立适配器。
+底图接口要求 256×256 XYZ、Web Mercator。高德底图使用 GCJ-02，程序会把 WGS84 地点和路线转换到 GCJ-02 后绘制，再把右键选点转换回 WGS84；切换到 OSM 或其他 WGS84 底图时把 `coordinate_system` 改为 `wgs84`。路径接口为 Valhalla 格式，`walking/cycling/driving` 分别映射到 `pedestrian/bicycle/auto`。可自部署 Valhalla；其他厂商路径 API 需实现独立适配器。
 
 请求在 `directions_options` 中指定 `language: zh-CN` 和 `units: kilometers`。当前公共 Valhalla 服务会把中文回退为英文；此时程序根据服务返回的转向类型、道路名称、方向和距离生成本地中文模板指引，并在导航面板标注来源。中文模板保留原道路名称；未知转向类型提示沿地图路线行进。
 

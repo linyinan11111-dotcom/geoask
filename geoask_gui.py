@@ -638,16 +638,20 @@ class GeoaskApp(tk.Tk):
 
         self._label(map_panel, "地图与道路路线", size=18, bold=True).pack(anchor="w", pady=(0, 14))
         map_fields = {}
-        for label, name, value in (("底图 XYZ URL（WGS84 / Web Mercator）", "tile_url", self.map_settings.tile_url),
+        for label, name, value in (("底图 XYZ URL（Web Mercator）", "tile_url", self.map_settings.tile_url),
                                     ("底图署名", "attribution", self.map_settings.attribution),
                                     ("User-Agent", "user_agent", self.map_settings.user_agent),
+                                    ("底图坐标系（wgs84 / gcj02）", "coordinate_system", self.map_settings.coordinate_system),
                                     ("Valhalla 路径 API 地址", "endpoint", self.routing_settings.endpoint)):
             self._label(map_panel, label, size=9, bold=True).pack(anchor="w", pady=(12, 5))
             var = tk.StringVar(value=value)
             map_fields[name] = var
-            ttk.Entry(map_panel, textvariable=var).pack(fill="x")
-        self._label(map_panel, "默认服务免 API Key，需要联网。底图 URL 必须包含 {z}/{x}/{y}。\n"
-                    "可接入兼容的自部署服务。不要直接使用 GCJ-02 或 BD-09 瓦片。\n"
+            if name == "coordinate_system":
+                ttk.Combobox(map_panel, textvariable=var, values=["wgs84", "gcj02"], state="readonly").pack(fill="x")
+            else:
+                ttk.Entry(map_panel, textvariable=var).pack(fill="x")
+        self._label(map_panel, "默认配置使用高德底图，需要联网。底图 URL 必须包含 {z}/{x}/{y}。\n"
+                    "高德底图使用 gcj02，其他 WGS84 底图请选择 wgs84；不要混用坐标系。\n"
                     "路径按真实道路计算，支持步行、骑行和驾车。\n\n"
                     "点击“获取设备位置”会读取 Windows 定位服务，来源可能是 GPS\n"
                     "或 Wi-Fi。不可用时仍可手动输入 WGS84 经纬度。",
