@@ -1,0 +1,59 @@
+{
+  "verified_at": "2026-10-26T07:43:38.418922+00:00",
+  "python": "3.13.12",
+  "platform": "win32",
+  "baseline_commit": "f67a39a",
+  "pytest": {
+    "passed": 211,
+    "real_local_model": true,
+    "real_tk_wiring": true,
+    "paid_llm": false,
+    "command": "GEOASK_MODEL_TESTS=1 GEOASK_REQUIRE_GUI=1 python -m pytest -q --tb=short"
+  },
+  "gui_report": "docs/gui-verification.json",
+  "gui_mode": "passed: real desktop, real tiles/routes, fixed LLM responses; isolated temporary credential store; save/restore/clear and settings layout verified",
+  "trip_report": "docs/trip-verification.json",
+  "data_report": "docs/data-verification.json",
+  "code_sha256": {
+    "geoask.py": "80ac7b073c61774988b69ef29b61b1130a6fe41ffaa3aece8afef7000499b433",
+    "geoask_credentials.py": "da7248ab38f9c6d5c4e90b6a1b30f279bfb1d31100e4a5c29ade1f7ff3c8d907",
+    "geoask_data.py": "aa879b1667355015e949b076fba671d8bb42826b103a60779451576c1d14fb50",
+    "geoask_gui.py": "b82a7f0ac8a1122862d602399a0ab8ffc8d2b5c42c5b071dd8542ded6104afc6",
+    "geoask_location.py": "6daf604c4aa5bf294d2537206ed8a23a0f6556f76157c8dcd543b63acecfb4f3",
+    "geoask_map.py": "0874d982145b3145ae94fa9549b4e6d64b3584a2fbef43720910e1869c8645fb",
+    "geoask_parking.py": "2b1555f930c1fdd0dcaa746dd327f29e68a780f7c120e316aaedea8db5c6f394",
+    "geoask_places.py": "f2c4b9885a99d3e535a25be25668c7c218ebab2d036294c5c9161b74617a7d49",
+    "geoask_routing.py": "29713a5c3f12ce69f4fe2cbfb9ca456ef76d9f2f0ca39e69ad38b3df6971e150",
+    "geoask_runtime.py": "bb87ef8e45540a82170d65c7024af9bedd2e2036cc47b9a3b443f169d6ebe287",
+    "geoask_service.py": "12d7b31b86b1f8da88fb5763bfe9362c9b910db5b453464b04c47838d8b8e6b0"
+  },
+  "packaging_sha256": {
+    "pyproject.toml": "14aa3a6fe0f8fb5b13e2b420a03d1309f13fe8ea2b8fb3a514a8226eab5caf2d",
+    "setup.py": "6a0d2d444682d6461cee9c8a430cfd1519b766104641746e169bedeba2ac4858",
+    "MANIFEST.in": "90975083419f41c67ca977404e5a4ab252c0035cd054d2f917ea67709b6402b6",
+    "geoask_resources/__init__.py": "cf11c0da66d31cb61b4c415ab6b9175cf9a2386e032322dd8561795ae8f0abaf"
+  },
+  "wheel_smoke": "passed: installed credential save/read/clear, CLI, local HTTP API, resources, spatial data, metadata and GUI initialization outside checkout",
+  "distribution_build": "sdist -> wheel",
+  "dependency_mode": "reuse validated interpreter dependencies; CI installs requirements afresh",
+  "artifacts": {
+    "geoask-0.2.0-py3-none-any.whl": "44761d77db45005cbf4deba48c41f1c78ebdcabbf13d0bcec7424dae332cd67d",
+    "geoask-0.2.0.tar.gz": "12e6e6b644f9d503880e73a86dc60abc82e94fa5b9f565c5b14ae09d30a76294"
+  },
+  "ci": "configured: Windows/Linux x 3.11/3.12/3.13, Tk/Xvfb; no remote configured; matrix not executed",
+  "remaining": "docs/review-p3-fixes.md",
+  "api_local_storage": {
+    "report": "docs/api-local-storage.md",
+    "windows_dpapi": true,
+    "cross_process_restore": true,
+    "test_keys_only": true,
+    "actual_user_credentials_modified": false
+  },
+  "architecture_document": "docs/项目代码结构与技术架构详解.md",
+  "verification_scripts_sha256": {
+    "scripts/verify_data.py": "0463f1074addca78c87b9ce17b2de5e45f0120bfcc7f07e4519d53d78f6af06e",
+    "scripts/verify_gui.py": "b45699001ab0a92e099304b15c3766b3b830313aa662e43d03b48befd6986cfc",
+    "scripts/verify_trip.py": "81d98a81573b01635bb38c86e15fbe856893c5ab37a6354ad48577db04ae85c5",
+    "scripts/verify_wheel.py": "3a5059d22007e3fdf4a3e239bb299c94600004d98de1c9425f88e86d3c0f28d1"
+  }
+}

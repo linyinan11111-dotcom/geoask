@@ -52,8 +52,9 @@ def test_bird_nest_resolves_real_venue_beyond_nearby_radius(engine, monkeypatch,
     stop = result.stops[0]
     assert stop.resolution == 'name' and stop.selected['name'] == '国家体育场'
     assert stop.selected['category'] == 'stadium'
-    assert stop.selected['longitude'] == pytest.approx(116.39028641782102)
-    assert stop.selected['latitude'] == pytest.approx(39.99140405)
+    manifest = json.loads((g.ROOT / 'data/places-manifest.json').read_text(encoding='utf-8'))
+    expected = manifest['verified_alias']['鸟巢']['coordinate']
+    assert (stop.selected['longitude'], stop.selected['latitude']) == pytest.approx(expected)
     assert stop.selected['dist_m'] > result.request.radius
     assert len(route_points(result)) == 2
     assert '不确认演出' in result.note

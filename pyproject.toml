@@ -1,13 +1,22 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "geoask"
-version = "0.2.0"
 description = "Natural-language nearby search with local embeddings and DuckDB spatial"
-requires-python = ">=3.10"
-dynamic = ["dependencies"]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: GIS",
+]
+requires-python = ">=3.11,<3.14"
+dynamic = ["dependencies", "version"]
 
 [project.scripts]
 geoask = "geoask:cli"
@@ -16,9 +25,11 @@ geoask = "geoask:cli"
 geoask-gui = "geoask_gui:main"
 
 [tool.setuptools]
-py-modules = ["geoask", "geoask_service", "geoask_gui", "geoask_map", "geoask_location", "geoask_routing", "geoask_places", "geoask_data", "geoask_parking"]
+py-modules = ["geoask", "geoask_service", "geoask_gui", "geoask_map", "geoask_location", "geoask_routing", "geoask_places", "geoask_data", "geoask_parking", "geoask_runtime", "geoask_credentials"]
+packages = ["geoask_resources"]
 
 [tool.setuptools.dynamic]
+version = {attr = "geoask_resources.__version__"}
 dependencies = {file = ["requirements.txt"]}
 
 [tool.pytest.ini_options]

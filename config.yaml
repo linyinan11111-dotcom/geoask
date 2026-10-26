@@ -40,7 +40,7 @@ parking:
   categories: [parking, parking_underground, parking_multistorey, 停车场]
   radius: 1000
 
-# LLM 接口：只解析意图。密钥放环境变量，切勿写入本文件。
+# LLM 接口：只解析意图。密钥可在 GUI 保存到本机或用环境变量，勿写入本文件。
 llm:
   base_url: https://api.deepseek.com
   model: deepseek-chat

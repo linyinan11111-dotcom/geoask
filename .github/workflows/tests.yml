@@ -1,0 +1,39 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      GEOASK_REQUIRE_GUI: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Tk and virtual display on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - name: Check Tk import
+        run: python -c "import tkinter; print(tkinter.TkVersion)"
+      - run: python -m pip install -r requirements-dev.txt setuptools wheel
+      - name: Run tests (Linux with display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest -q
+      - run: python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+      - shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python scripts/verify_wheel.py dist/geoask-*.whl
+          else
+            python scripts/verify_wheel.py dist/geoask-*.whl
+          fi

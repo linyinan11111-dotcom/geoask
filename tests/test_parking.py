@@ -10,6 +10,14 @@ from geoask_parking import parking_route_points
 from geoask_service import QueryEngine, QueryRequest, route_points
 
 
+def test_parking_limit_reports_total_count(trip):
+    engine, result = trip
+    limited = replace(result, request=replace(result.request, limit=1))
+    options = engine.find_parking(limited, 1000)
+    assert len(options.candidates) == 1 and options.total_count == 2
+    assert '2' in options.summary and '最近 1 个' in options.summary
+
+
 @pytest.fixture
 def trip(tmp_path, monkeypatch):
     features = []

@@ -4,6 +4,8 @@ import sys
 import time
 import tempfile
 import traceback
+import hashlib
+from datetime import datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 from PIL import ImageGrab
@@ -11,18 +13,25 @@ from PIL import ImageGrab
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geoask as g
 from geoask_gui import GeoaskApp
+import geoask_credentials as credentials
 
 
 def main():
+    temporary = tempfile.TemporaryDirectory(prefix='geoask-gui-')
+    region_dir = Path(temporary.name)
+    # Saving settings in this probe must never overwrite the user's real profile.
+    profile_patch = patch.object(credentials, 'connection_file', lambda: region_dir / 'connection.dat')
+    profile_patch.start()
     app = GeoaskApp()
     output = g.ROOT / 'docs'
-    report = {'ui_ticks': 0}
+    report = {'ui_ticks': 0, 'verified_at': datetime.now(timezone.utc).isoformat(),
+              'code_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                              for p in g.ROOT.glob('geoask*.py')}}
     deadline = time.monotonic() + 320
-    phase = 'trip'
+    phase = 'ambiguous'
+    alternative = None
     original_parse_plan = g.parse_plan
     assert not app.parking_enabled.get()
-    temporary = tempfile.TemporaryDirectory(dir=g.ROOT / '.cache')
-    region_dir = Path(temporary.name)
     region_source = region_dir / 'guangzhou-test.geojson'
     region_source.write_text(json.dumps({'type':'FeatureCollection','features':[
         {'type':'Feature','properties':{'title':'广州塔', 'alt_name':'小蛮腰;Canton Tower'},
@@ -31,8 +40,17 @@ def main():
     imported_path = region_dir / 'guangzhou.yaml'
 
     def capture(window, path):
+        window.deiconify()
+        window.lift()
         window.update()
-        picture = ImageGrab.grab(window=window.winfo_id())
+        # Windows may briefly return a black compositor surface after a window
+        # is covered/minimized. Retry only capture; never accept a black artifact.
+        for attempt in range(3):
+            picture = ImageGrab.grab(window=window.winfo_id())
+            if picture.convert('L').getextrema()[1] > 100:
+                break
+            time.sleep(.2)
+            window.update()
         assert picture.width > 100 and picture.height > 100
         assert picture.convert('L').getextrema()[1] > 100, 'Black capture'
         picture.save(path)
@@ -49,17 +67,46 @@ def main():
         app.close()
 
     def check():
-        nonlocal phase
+        nonlocal phase, alternative
         try:
             assert time.monotonic() < deadline, 'Timed out: ' + phase
             if app.busy:
                 app.after(150, check)
                 return
-            if phase == 'trip':
+            if phase == 'ambiguous':
+                assert app.result and app.result.stops[0].candidates, app.notice.cget('text')
+                stop = app.result.stops[0]
+                assert stop.selected is None and '请选择具体地点' in app.status.get()
+                assert app.route_button.cget('state') == 'disabled'
+                if app.map_view.pending:
+                    app.after(150, check)
+                    return
+                width, height = app.map_view.winfo_width(), app.map_view.winfo_height()
+                positions = [app.map_view.screen_point(r['longitude'], r['latitude']) for r in stop.candidates]
+                assert all(20 < x < width-20 and 20 < y < height-20 for x, y in positions)
+                capture(app, output / 'gui-ambiguous.png')
+                report['ambiguous_candidates_visible'] = {'shown': len(positions), 'zoom': app.map_view.zoom,
+                    'total_name_matches': stop.candidates[0]['name_match_count'], 'explicit_selection_required': True}
+                app._set_busy(True)
+                app.events.put(('route', ()))  # Inject a handler failure, not a worker failure.
+                app.events.put(('progress', '轮询已恢复'))
+                phase = 'poll_recovery'
+            elif phase == 'poll_recovery':
+                assert not app.busy and app.status.get() == '轮询已恢复'
+                assert app.search_button.cget('state') == 'normal'
+                report['handler_exception_recovery_ok'] = True
+                g.parse_plan = original_parse_plan
+                app.api_key.set('')
+                app.auto_route.set(True)
+                app.start_trip_demo()
+                phase = 'trip'
+            elif phase == 'trip':
                 assert app.result is not None, app.notice.cget('text')
                 assert len(app.result.stops) == 2 and all(s.selected for s in app.result.stops)
                 assert app.road_route is not None, app.route_summary.get()
                 assert len(app.road_route.legs) == 2
+                assert app.road_route.instruction_language == 'zh-CN'
+                assert app.road_route.legs[0].instructions and not app.road_route.legs[0].instructions[0].startswith('Walk')
                 if app.map_view.tiles_loaded < 4 or app.map_view.pending:
                     app.after(150, check)
                     return
@@ -67,16 +114,26 @@ def main():
                                'route_m': app.road_route.distance_m, 'route_s': app.road_route.duration_s,
                                'real_map_tiles': app.map_view.tiles_loaded,
                                'route_geometry_points': len(app.road_route.coordinates)})
-                capture(app, output / 'gui.png')
                 capture(app, output / 'gui-route.png')
+                report['route_language'] = {'provider': app.road_route.language,
+                    'display': app.road_route.instruction_language, 'source': app.road_route.instruction_source,
+                    'first_instruction': app.road_route.legs[0].instructions[0]}
+                before = app.map_view.zoom
+                app.map_view.zoom_at(1)
+                assert app.map_view.zoom == before + 1
+                app.map_view.zoom_at(-1)
+                assert app.map_view.zoom == before
+                report['zoom_in_and_out_ok'] = True
                 app.show_candidates(1)
                 assert app.table.get_children()
                 assert app.result.stops[1].candidates[0]['category'] == 'fitness_centre'
                 capture(app, output / 'gui-candidates.png')
-                app.reselect_stop(0, 2)
+                first = app.result.stops[0]
+                alternative = next((i for i in range(len(first.candidates)) if i != first.selected_index), first.selected_index)
+                app.reselect_stop(0, alternative)
                 phase = 'reselect'
             elif phase == 'reselect':
-                assert app.result.stops[0].selected_index == 2
+                assert app.result.stops[0].selected_index == alternative
                 assert app.road_route is not None, app.route_summary.get()
                 assert app.result.stops[1].center == (app.result.stops[0].selected['longitude'], app.result.stops[0].selected['latitude'])
                 report['reselect_and_reroute_ok'] = True
@@ -222,6 +279,7 @@ def main():
             elif phase == 'error':
                 assert app.result is None and '无法读取配置' in app.notice.cget('text')
                 assert app.search_button.cget('state') == 'normal'
+                assert not app.stop_combos
                 report['error_recovery_ok'] = True
                 app.config_path = g.ROOT / 'config.yaml'
                 app.open_settings()
@@ -234,11 +292,30 @@ def main():
                 capture(window, output / 'gui-settings.png')
                 report['settings_dialog_ok'] = True
                 tabs = next(child for child in window.winfo_children() if child.winfo_class() == 'TNotebook')
+                panel = tabs.winfo_children()[0]
+                entries = [c for c in panel.winfo_children() if c.winfo_class() == 'TEntry']
+                entries[-1].insert(0, 'unsaved-session-key')
                 tabs.select(1)
                 phase = 'map_settings'
             elif phase == 'map_settings':
                 capture(app.settings_window, output / 'gui-map-settings.png')
                 report['map_settings_tab_ok'] = True
+                tabs = next(c for c in app.settings_window.winfo_children() if c.winfo_class() == 'TNotebook')
+                panel = tabs.winfo_children()[1]
+                buttons = [c for c in panel.winfo_children() if c.winfo_class() == 'Button']
+                buttons[-1].invoke()
+                assert app.api_key.get() == 'unsaved-session-key'
+                assert not app.settings_window.winfo_exists()
+                report['apply_preserves_other_tab_key_ok'] = True
+                assert credentials.load_connection()['api_key'] == 'unsaved-session-key'
+                app.api_key.set('')
+                app._restore_connection(restore_profile=True)
+                assert app.api_key.get() == 'unsaved-session-key' and app.api_key_is_saved
+                app.open_settings()
+                app.clear_saved_button.invoke()
+                assert credentials.load_connection() is None and not app.api_key.get()
+                app.settings_window.destroy()
+                report['local_connection_save_restore_clear_ok'] = True
                 finish()
                 return
             app.after(200, check)
@@ -248,10 +325,31 @@ def main():
             finish(exc)
 
     app.after(30,tick)
-    app.after(350,app.start_trip_demo)
-    app.after(700,check)
-    app.mainloop()
-    temporary.cleanup()
+    def start():
+        try:
+            capture(app, output / 'gui.png')
+            app.api_key.set('gui-regression-test-not-a-real-key')
+            app.auto_route.set(False)
+            g.parse_plan = lambda *a, **kw: g.GeoPlan(stops=[g.GeoIntent(
+                intent='咖啡', modifiers=[], place_name='星巴克')], travel_mode='walking')
+            app.query.set('去星巴克')
+            app.submit()
+            # capture() pumps Tk events. Start result checks only after the
+            # first submission, so a slow compositor cannot close the app early.
+            app.after(350, check)
+        except Exception as exc:
+            report['failed_phase'] = 'startup'
+            report['traceback'] = traceback.format_exc()
+            finish(exc)
+
+    app.after(350, start)
+    try:
+        app.mainloop()
+    finally:
+        g.parse_plan = original_parse_plan
+        app.close()
+        profile_patch.stop()
+        temporary.cleanup()
     print(json.dumps(report, ensure_ascii=True, indent=2))
     if not report.get('passed'):
         raise SystemExit(1)

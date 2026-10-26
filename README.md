@@ -2,17 +2,19 @@
 
 输入一句自然语言，通过 DeepSeek 解析意图、本地嵌入匹配数据类别，再用 DuckDB spatial 查询附近地点；指定地标或门店时改用名称/别名查找。默认附近样例为北京国贸周边的真实 OpenStreetMap 数据，并附带北京实名地点目录。
 
+完整代码说明：[项目代码结构与技术架构详解](docs/项目代码结构与技术架构详解.md)。包含目录与函数索引、执行流程、技术选择、设计理由、本地密钥保存、地图导航、测试和扩展说明。
+
 ## 桌面界面
 
 Windows 双击 **`启动界面.cmd`**，或运行 `python geoask_gui.py`。已有虚拟环境时可直接执行 `.venv\Scripts\pythonw.exe geoask_gui.py`；安装项目后也可使用 `geoask-gui` 命令。
 
 界面支持自然语言、多站行程、真实道路底图、设备定位、手动经纬度、候选地点切换、步行/骑行/驾车路径规划，以及行程 CSV 导出。地图可拖动、滚轮缩放，右键可设置查询起点。
 
-在“接口设置”中填写 DeepSeek API Key，即可查询；也可以读取 `DEEPSEEK_API_KEY` 环境变量。界面内的密钥仅在当前会话使用，不写入磁盘，原有 `config.yaml` 接口配置仍然有效。点击“更换配置”可以切换数据集；点击“导入地区数据”可以选择新的 GeoJSON、GPKG 等文件，填写字段映射后生成独立地区配置。导入配置会保留当前接口地址、模型、底图和路径设置，供以后复用。
+在“接口设置”中填写 DeepSeek API Key，保留“保存接口和密钥到本机”勾选并点击“应用所有设置”，下次启动会自动读取，不用重复输入。也支持 `DEEPSEEK_API_KEY` 环境变量；详见下方“本地保存 API 设置”。点击“更换配置”可以切换数据集；点击“导入地区数据”可以选择新的 GeoJSON、GPKG 等文件，填写字段映射后生成独立地区配置。导入配置会保留当前接口地址、模型、底图和路径设置，供以后复用。
 
 没有密钥时，可点击“试试咖啡示例”或“体验：咖啡 → 健身”：只固定意图解析结果，嵌入、OSM 地点查询和道路路线均为真实执行。勾选“仅预览查询”时不执行地点搜索及道路规划；后续站点依赖前站选择，因此只展示可确定中心的第一站 SQL。查询、地图下载和路线请求均在后台执行。
 
-界面使用 Tkinter + Pillow（已列入运行依赖）。Linux 若未附带 Tkinter，请安装系统的 `python3-tk` 包。
+界面使用 Tkinter + Pillow；Pillow 已列入 Python 依赖，Tkinter 是 Python/系统组件。Linux 若未附带 Tkinter，请安装系统的 `python3-tk` 包。
 
 界面后台服务有独立自动测试。`python scripts/verify_gui.py` 会在真实桌面窗口中联网验证地图瓦片、多站道路路线、更换地点后重算、预览、缩放和错误恢复，并更新截图。`python scripts/verify_trip.py` 只验证真实“咖啡 → 健身”查询和步行路线，不打开窗口、不调用付费 LLM。
 
@@ -31,6 +33,8 @@ Windows 双击 **`启动界面.cmd`**，或运行 `python geoask_gui.py`。已�
 输入“我想去鸟巢看演唱会”时，解析器保留 `place_name="鸟巢"`，把“演唱会”保留为活动，不会把它变成另一个站点或附近任意场馆。程序通过已核实别名“鸟巢 → 国家体育场”，从北京实名地点目录读取真实坐标 `(116.390286,39.991404)`，随后在地图标注并按所选方式规划道路路线。这里确认的是地点，不查询演出日程或门票。
 
 指定名称的目的地不受 1000 米“附近类别”半径限制；距离仍相对起点或前一站计算。优先精确名称/数据别名匹配，其次核对模型提供的正式名称候选，最后匹配原名称子串。模型候选、子串匹配或多个同名地点均需要用户选择，选定前不自动规划完整路线；没找到时明确提示补充名称或切换数据，不替换成其他场馆。名称查询不加载嵌入模型。
+
+例如“去星巴克”会显示多个候选，并把起点、当前站候选及已选站点一起纳入地图视野，状态提示“请选择具体地点”；单点自动定位最多放大到 15 级。
 
 默认配置附带约 4.25 MiB 的 `data/beijing_places.gpkg`，含 29,131 条北京地点（其中 4,776 条汽车停车场），按名称或停车场检索时才加载。它不代表全国数据覆盖，也不扩展附近类别查询的覆盖范围。自定义数据可把 `place_catalog_path` 设为 `null`，仅搜索自己的名称/别名和停车场；也可提供自己的区域地名目录，其图层、字段映射和坐标系均可配置：
 
@@ -64,6 +68,8 @@ place_aliases:
 
 在“地图与行程”勾选 **“驾车到最后一站附近停车场”**，默认关闭。先选定全部行程地点，再查找最后一站周边的汽车停车场，默认半径 1000 米，可在 1–5000 米范围内调整。下拉列表按距最后一站的 WGS84 直线距离排序，支持有名称和未命名停车场；选择一个后点击“规划路线”。
 
+列表同时显示匹配总数；超过“最多结果”时说明只显示最近若干个，可缩小半径或增大结果上限。未命名停车场附带经纬度，结合地图标记区分。查询期间禁用“仅预览”和“自动规划”开关，避免界面选项与已提交请求不一致。
+
 停车模式使用真实驾车道路路线，将最后一段终点改为所选停车场，保留前面各站和原目的地记录；地图用 `P` 标注停车场，用站点编号标注原目的地。“分段导航”会说明实际驾车终点及停车场到原目的地的直线距离，这段距离不等于步行路线。关闭选项后恢复原来的出行方式；更换站点或地区会清除旧停车场选择和路线。更改停车半径后再次规划会重新查找并要求选择。
 
 停车场来自当前数据和当前地区的补充目录，不由 LLM 生成；没有记录时提示增大半径或切换数据，不使用其他地区停车场兜底。北京示例补充目录已包含从交通点、面图层提取的汽车停车场，排除自行车停车区。其他地区的数据需要类别字段中实际包含停车场；可在地区配置中指定自己的类别值：
@@ -76,9 +82,11 @@ parking:
 
 数据不提供实时车位、收费、开放时间或准入保证；部分场地可能限制进入。停车场几何代表点未必是车辆入口，道路规划会吸附到可通行道路。CSV 导出保留用户原始行程目的地。
 
+直接输入“附近停车场”时，按当前主数据中实际存在的 `parking.categories` 类别查询，不加载嵌入模型，也不会映射为 `park`（公园）；支持自定义停车类别。默认国贸主数据没有停车类别，会提示切换含停车场的数据；GUI 还可先选目的地，再启用上述停车导航，查询补充目录。单站和多站采用同一规则。“有停车位的咖啡店”“停车方便的餐厅”等仍按咖啡/餐厅查询，停车修饰条件会显示为未应用，不能保证有车位。解析器返回“不明确 / unknown / 未知”时停止查询并提示补充需求。
+
 ### 地图与路线 API
 
-默认底图为 [OpenStreetMap Standard](https://tile.openstreetmap.org/)，路线为 [Valhalla 公共实例](https://valhalla1.openstreetmap.de/)，均免 API Key、需要网络。公共服务可能限流或不可用；可在“接口设置 → 地图与路径 API”临时替换兼容服务，或修改配置持久保存：
+默认底图为 [OpenStreetMap Standard](https://tile.openstreetmap.org/)，路线为 [Valhalla 公共实例](https://valhalla1.openstreetmap.de/)，均免 API Key、需要网络。公共服务可能限流或不可用；可在“接口设置 → 地图与路径 API”替换并保存兼容服务，或修改配置：
 
 ```yaml
 map:
@@ -92,7 +100,11 @@ routing:
 
 底图接口要求 256×256 XYZ、Web Mercator / WGS84。未经坐标适配不能直接套用高德 GCJ-02 或百度 BD-09 底图，否则与 WGS84 POI 错位。路径接口为 Valhalla 格式，`walking/cycling/driving` 分别映射到 `pedestrian/bicycle/auto`。可自部署 Valhalla；其他厂商路径 API 需实现独立适配器。
 
-底图仅下载可见区域，两个后台下载线程，磁盘缓存七天，不批量预抓。缓存位于配置目录的 `.cache/tiles`，可离线显示已缓存瓦片；新区域底图与道路规划仍需要网络。地图瓦片请求会向所选服务透露可见区域，路径请求发送起点和所选站点；LLM 只接收查询原文，不接收设备坐标或 POI 数据。请遵守 [OSM 瓦片使用政策](https://operations.osmfoundation.org/policies/tiles/)，公开部署或大量使用建议换成自托管或有配额的服务。
+请求在 `directions_options` 中指定 `language: zh-CN` 和 `units: kilometers`。当前公共 Valhalla 服务会把中文回退为英文；此时程序根据服务返回的转向类型、道路名称、方向和距离生成本地中文模板指引，并在导航面板标注来源。中文模板保留原道路名称；未知转向类型提示沿地图路线行进。
+
+返回的路线单位会校验；自部署服务返回 `miles` 时转换为米，未知单位拒绝使用。起步方向优先读取实际响应的 `bearing_after`。
+
+底图仅下载可见区域，两个后台下载线程，磁盘缓存七天，启动及切换底图时按时间/128 MiB 容量上限清理，不批量预抓。源码配置默认为 `.cache/tiles`，普通安装使用用户缓存目录的 `tiles`；可离线显示已缓存瓦片；新区域底图与道路规划仍需要网络。地图瓦片请求会向所选服务透露可见区域，路径请求发送起点和所选站点；LLM 只接收查询原文，不接收设备坐标或 POI 数据。请遵守 [OSM 瓦片使用政策](https://operations.osmfoundation.org/policies/tiles/)，公开部署或大量使用建议换成自托管或有配额的服务。
 
 ![geoask 演示](docs/demo.gif)
 
@@ -100,7 +112,7 @@ routing:
 
 ## 快速开始
 
-Python 3.10+。进入本目录，在 PowerShell 中执行三条命令：
+Python 3.11–3.13（`>=3.11,<3.14`，与锁定依赖的支持范围一致）。进入本目录，在 PowerShell 中执行三条命令：
 
 ```powershell
 python -m pip install -r requirements.txt -e .
@@ -112,7 +124,13 @@ Bash 第二条命令换成 `export DEEPSEEK_API_KEY="你的密钥"`。推荐事�
 
 仓库已附带约 156 KB 的附近样例 GPKG 和约 4.25 MiB 的北京地点及停车场目录，不需要下载完整北京数据。首次运行需联网安装 DuckDB spatial，类别查询还需下载多语言嵌入模型（FastEmbed 标注约 0.22 GB），后续使用本地缓存。正常自然语言查询每次仍会请求配置的 LLM API。
 
+普通 `pip install .` 或 wheel 安装同样包含默认配置、OSM 数据、清单和 Windows 定位脚本，资源通过 `importlib.resources` 定位。已安装版本的缓存写入用户目录（Windows：`%LOCALAPPDATA%/geoask`；其他系统：`$XDG_CACHE_HOME/geoask` 或 `~/.cache/geoask`），不会写入 site-packages。源码运行和自定义配置的缓存路径仍由 `cache_dir` 决定。
+
+从旧版 editable 安装升级后，请在同一虚拟环境重新执行 `python -m pip install -e .`，以注册新增的 `geoask_resources` 包和入口。只更新源码不会刷新安装元数据。同一份配置使用相对或绝对 `--config` 路径时共享缓存；源码的 `--config config.yaml` 不会自动迁移到用户缓存目录。
+
 没有安装命令入口时，也可以 `python geoask.py "我想喝咖啡" --explain`。
+
+CLI 无法理解意图、类别不匹配、查询无结果或输入无效时返回非零退出码；成功输出和有效 `--dry-run` 返回 0。
 
 ```text
 geoask QUERY [--near 经度,纬度] [--radius 米] [--limit 条数]
@@ -124,6 +142,20 @@ geoask QUERY [--near 经度,纬度] [--radius 米] [--limit 条数]
 `--dry-run` 完成意图解析、数据加载和类别映射，打印带 `?` 的 SQL 及独立绑定参数，不执行最终邻近查询；它仍会调用 LLM，并可能首次下载模型。映射被拒绝时列出可用类别，不生成查询。
 
 ## DeepSeek / OpenAI / 本地接口
+
+### 本地保存 API 设置
+
+1. 打开界面的“接口设置”，填写接口地址、模型、API Key。
+2. 勾选 **“保存接口和密钥到本机，下次自动读取”**（默认勾选），点击任一页面的“应用所有设置”。同时保存 LLM、底图和路径接口参数。
+3. 下次正常启动默认配置时，恢复上述接口参数与密钥。切换到自定义地区配置时尊重该配置的接口参数，只有接口地址及密钥环境变量一致才自动复用保存的密钥。
+
+Windows 文件位于 `%LOCALAPPDATA%\geoask\connection.dat`，使用 Windows DPAPI 按当前用户加密；文件复制给其他 Windows 用户通常无法解密。Linux 位于 `${XDG_CONFIG_HOME:-~/.config}/geoask/connection.dat`，macOS 位于 `~/Library/Application Support/geoask/connection.dat`；这些系统当前使用权限为 `0600` 的明文文件，界面会说明，不声称系统加密。
+
+仅保存一组当前接口，不维护多账号列表。界面本次输入优先于环境变量；自动恢复的密钥优先级低于环境变量。CLI 仍从所选 YAML 读取接口地址和模型，密钥按“环境变量 → 匹配接口的本地保存”读取；保存了自定义服务后，CLI 应选择同一服务的配置文件。
+
+取消勾选再应用会删除本地保存，仅本次使用；点击 **“清除本地保存的接口和密钥”** 会立即删除文件并清空当前密钥，不删除环境变量。普通退出不会清除已保存内容。保存失败会保留对话框和原会话状态；损坏或无法解密时提示清除后重存。
+
+真实密钥不写入仓库 `config.yaml`、地区导出、CSV 或查询 SQL；本地文件在用户目录，另有 `.gitignore` 防止误放入仓库的同名文件被提交。加密保护的是磁盘文件，不能阻止同一已登录用户的程序读取密钥。测试与 GUI 验证脚本使用隔离临时路径，不覆盖用户真实设置。
 
 CLI 接口保留在 `parse_intent(query, settings, client=None)`；GUI 使用 `parse_plan(query, settings, client=None)` 解析有顺序的多站行程。两者的 `client` 均可注入便于替换与测试。默认 `config.yaml`：
 
@@ -153,7 +185,7 @@ llm:
   timeout_seconds: 30
 ```
 
-`structured` 使用 SDK 的 `chat.completions.parse(response_format=GeoIntent)`，参见 [official OpenAI documentation](https://developers.openai.com/api/docs/guides/structured-outputs)。本地兼容服务可修改 URL、模型和密钥环境变量名，按服务能力选择 `json_object` 或 `structured`。密钥只从环境变量读取，不存入配置或打印到终端；本地服务若不验证密钥，可设置一个占位值。
+`structured` 使用 SDK 的 `chat.completions.parse(response_format=GeoIntent)`，参见 [official OpenAI documentation](https://developers.openai.com/api/docs/guides/structured-outputs)。本地兼容服务可修改 URL、模型和密钥环境变量名，按服务能力选择 `json_object` 或 `structured`。密钥可来自本次输入、环境变量或匹配接口的本地保存，不写入数据配置或打印到终端；本地服务若不验证密钥，可设置一个占位值。
 
 “安静”“适合约会”等修饰词会被解析和展示，但样例没有相应属性，不参与筛选，CLI 会明确提示未应用。LLM 不接收地点数据库，也不能提供 SQL 或决定最终类别。`place_name` 仅记录用户明确指定的名称；旧接口省略该字段时仍兼容为类别查询。新接口应始终输出该字段，未指定时为 `null`。可选 `place_candidates` 最多包含 4 个同一目的地的正式名或跨语言名称，必须在当前数据中精确找到，且需要用户确认后才能导航；模型不能返回坐标。
 
@@ -185,6 +217,8 @@ place_aliases: {}
 
 正式名称从 `field_mapping.name` 读取，常见 `alt_name`、`short_name`、`official_name`、`old_name`、`loc_name`、`int_name`、`alias/aliases`、`name:zh/name:en` 等列自动保留。别名列支持数组，或使用 `;`、`；`、`|` 分隔的字符串。自定义“别称”“英文名”等字段写入 `field_mapping.aliases`；没有额外字段时用 `aliases: []`。如“广州塔”记录的 `alt_name` 为“小蛮腰”，查询“小蛮腰”就会返回该记录，不需要修改代码或维护全国别名表。
 
+读取前用元数据核对图层名，大小写不一致时解析到真实图层，不存在则列出可用图层；不会把未核实名称传入 `ST_Read`。字段映射同样忽略大小写。混合数组/字符串别名的每个元素都拆分并清理空值；空的手工别名映射会被拒绝。名称及查询统一处理全角字符、全角空格和 NBSP。损坏文件、无效 CRS 或非几何字段会给出中文修正提示，原始异常保留在日志中。
+
 没有类别列时设 `category: null`，GUI 对应输入框留空。此时仍能查询具体地标、门店和别名，但不能按“附近咖啡”等类别查找。没有名称/类别的记录不会被虚构补齐。对于数据中未记录的俗称，DeepSeek 可提出正式名候选（例如“小蛮腰 → 广州塔”），程序只核对该名称是否存在于当前数据中，并提示用户确认；既没名称也没对应记录时会明确未找到。更换区域不保证数据不存在的目的地也能查到。
 
 不要猜字段名。可先检查元数据与类别：
@@ -194,10 +228,12 @@ import duckdb
 con = duckdb.connect()
 con.execute("INSTALL spatial; LOAD spatial;")
 print(con.execute("SELECT * FROM ST_Read_Meta(?)", ["data/my_places.gpkg"]).fetchall())
+from geoask import resolve_layer
+layer = resolve_layer(con, "data/my_places.gpkg", "poi")
 print(con.execute("DESCRIBE SELECT * FROM ST_Read(?, layer = ?)",
-                  ["data/my_places.gpkg", "poi"]).fetchall())
+                  ["data/my_places.gpkg", layer]).fetchall())
 print(con.execute("SELECT fclass, count(*) FROM ST_Read(?, layer = ?) GROUP BY fclass",
-                  ["data/my_places.gpkg", "poi"]).fetchall())
+                  ["data/my_places.gpkg", layer]).fetchall())
 ```
 
 程序将源 CRS 转为 WGS84，并用 `ST_PointOnSurface` 把面或线转换为代表点，统一计算到代表点的距离。它不计算到门口、最近边界或沿道路的路程。中文类别也可直接使用；如果更换嵌入模型，请重新评估阈值。
@@ -235,7 +271,9 @@ python scripts/prepare_data.py
 python scripts/prepare_places.py
 ```
 
-脚本按需下载约 72 MB 的日期固定归档，裁剪后写回 GPKG。归档未来可能被上游清理；若 URL 失效，请更换为明确日期的新归档并重新检查统计。GPKG 写入时间等元数据可能导致重新生成的二进制校验值不同，内容和裁剪步骤可复现。
+脚本按需下载约 72 MB 的日期固定归档，并校验固定 SHA256；归档布局变化时明确报错。解压缓存按大小和 CRC 校验，损坏或中断产生的缓存重新提取。裁剪与国家体育场唯一性校验、GPKG 回读检查均在发布前完成；清单采用临时文件后原子替换，清单发布失败会回滚数据。数据与清单两个文件不构成断电事务，进程被杀后应检查清单哈希或重新生成。归档未来可能被上游清理；若 URL 失效，请更换为明确日期的新归档并一并更新固定校验值。GPKG 写入时间等元数据可能导致重新生成的二进制校验值不同，内容和裁剪步骤可复现。
+
+两个脚本支持 `--output-dir 路径`。`python scripts/verify_data.py` 在系统临时目录重建两份数据，核对清单、数据统计及鸟巢记录，不覆盖仓库样例，报告保存到 `docs/data-verification.json`；没有缓存归档时仍需联网下载。
 
 地名目录同样来自该归档，保留有名称的北京点/面 POI 和交通地点，另从 `gis_osm_traffic_free`、`gis_osm_traffic_a_free` 提取汽车停车场（包括未命名停车场）；排除公交站与出租车点，不提取自行车停车区，按 `osm_id/name` 去重，面取代表点。共 29,131 条地点，4,776 条类别为 `parking`。与附近样例适用相同 ODbL 许可。`data/places-manifest.json` 记录来源、哈希、条数及鸟巢对应的 OSM ID `152301551`。目录代表点未验证为场馆或停车场入口。
 
@@ -247,7 +285,7 @@ python -m pytest -q
 $env:GEOASK_MODEL_TESTS="1"; python -m pytest -q
 ```
 
-默认跳过真实模型测试，避免自动下载；空间测试首次需要联网安装扩展。启用 `GEOASK_MODEL_TESTS=1` 后覆盖真实中文类别匹配（包括咖啡和健身）。测试不调用付费 API；通过 mock 和本地 HTTP 兼容服务验证 DeepSeek 单站/多站请求与 JSON 响应，覆盖无效输出、安全预览、米制距离、索引、缓存、选点和后续站更新、三种 Valhalla 模式、polyline 解码、错误路线响应、定位过期及权限失败、底图投影等。
+演示与真实模型测试首次也需要下载模型，并非首次启动即可离线使用。默认跳过真实模型测试，避免自动下载；空间测试首次需要联网安装扩展。启用 `GEOASK_MODEL_TESTS=1` 后覆盖真实中文类别匹配（包括咖啡和健身）。测试不调用付费 API；通过 mock 和本地 HTTP 兼容服务验证 DeepSeek 单站/多站请求与 JSON 响应，覆盖无效输出、安全预览、米制距离、索引、缓存、选点和后续站更新、三种 Valhalla 模式、polyline 解码、错误路线响应、定位过期及权限失败、底图投影等。
 
 名称回归还覆盖鸟巢/国家体育场别名、超出附近半径的目的地、同名地点显式选择、未找到时不替换场馆、名称注入、名称预览不执行查询，以及 CLI 不加载类别模型。GUI 验证脚本还会用固定解析响应测试鸟巢的真实地点与道路路线，保存 `docs/gui-named-place.png`；固定解析响应不代表已调用真实 DeepSeek。
 
@@ -255,4 +293,29 @@ $env:GEOASK_MODEL_TESTS="1"; python -m pytest -q
 
 停车场测试覆盖以最后一站为搜索中心、距离排序、未命名停车场、自行车停车区排除、自定义地区类别/目录、半径边界、预览和未选定站点禁止查询、空结果，以及仅替换最终驾车终点。GUI 验证使用鸟巢附近真实停车场和 Valhalla 驾车道路路线，保存 `docs/gui-parking-route.png`，并检查无结果及关闭停车模式后的状态恢复。
 
-`requirements.txt` 锁定直接运行依赖，`requirements-dev.txt` 增加测试及演示渲染依赖。`requirements.lock.txt` 为本次 Windows / Python 3.13 验证环境的完整依赖快照。重新生成演示图：`python scripts/render_demo.py`。
+`requirements.txt` 锁定直接运行依赖，`requirements-dev.txt` 增加 pytest（Pillow 同时用于界面和演示）。`requirements.lock.txt` 为本次 Windows / Python 3.13 验证环境的完整依赖快照。重新生成演示图：`python scripts/render_demo.py`；可用 `--font 中文字体文件` 或 `GEOASK_FONT` 指定字体。
+
+
+### 异常恢复与安装验证
+
+GUI 和地图队列逐事件隔离异常，并始终重新安排轮询；后台请求携带代际标识，地区切换或新查询后忽略过期响应。查询失败时清空旧站点控件。后台及界面异常保留 traceback，滚动日志位于用户缓存目录 `logs/geoask.log`（单文件 2 MB，保留 3 份备份）；日志不主动记录 API Key 或完整请求对象。
+
+类别向量缓存无效、空文件、错误格式或维度不符时重建。字段映射忽略大小写，别名会清理空白/null。地区配置、CSV 和瓦片写入采用同目录临时文件后替换；瓦片下载成功但无法写缓存时仍显示。地区配置禁止覆盖现有文件，不依赖硬链接。
+
+新配置使用系统的原子且不覆盖的重命名操作；不预先创建空目标，多个写入者只能有一个成功，不支持该操作的文件系统会提示换目录。文件清理失败会记日志并保留原始异常；已有文件的 POSIX 权限位会保留。日志首次初始化有线程锁，异常队列事件也不会中断后续事件。断电持久性、多个文件的原子提交和多个进程共享滚动日志不在保证范围内。
+
+描述词限制为最多 16 个、每个 1–100 字符。响应必须完整结束；多站解析必须显式给出出行方式。切换为 E5 模型时采用查询 `query:`、类别 `passage:` 前缀并重新建立类别缓存；默认多语言 MiniLM 模型不受影响。
+
+`tests/test_reliability.py` 提供无头 GUI/地图队列、异常恢复、过期事件、设置表单、缓存写失败、时间戳、定位 subprocess 和导入失败测试。示例数量与地标坐标从数据 manifest 读取。GitHub Actions 配置 Windows/Linux × Python 3.11、3.12、3.13；当前本机验证为 Windows / Python 3.13，其他矩阵需由 CI 实际执行。
+
+`tests/test_review_round2.py` 覆盖图层原生崩溃的子进程回归、停车语义、别名和导入错误等；`tests/test_gui_wiring.py` 创建真实 Tk 控件，替换地图网络与工作线程，检查 `_show_result`、两页 Apply、代际接线和换点失败恢复，无需 HTTP 或模型。Linux 用 `xvfb-run -a python -m pytest -q`；CI 显式安装 `python3-tk`/Xvfb，并将缺失显示环境视为失败。真实 GUI 验证脚本使用系统临时目录，不要求检出后已有 `.cache/`，但首次模型下载和网络服务仍需可用。
+
+构建并在仓库外普通安装验证（依赖复用当前解释器，CI 先全新安装依赖）：
+
+```powershell
+python -m pip install setuptools wheel
+python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
+python scripts/verify_wheel.py dist/geoask-0.2.0-py3-none-any.whl
+```
+
+安装冒烟会验证打包资源、真实 GPKG 加载、CLI 入口和本地 HTTP 兼容接口；Windows 上还初始化并关闭安装后的 GUI。真实桌面验证记录 `docs/gui-verification.json` 包含时间戳和生产代码 SHA256，检查模糊候选可见、轮询异常恢复、实际缩放、设置跨页保存、中文模板、道路路线和停车导航。`gui.png` 是初始界面，`gui-route.png` 是路线界面。

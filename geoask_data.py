@@ -1,12 +1,11 @@
 """Validate a new regional file and save an independent reusable configuration."""
 from pathlib import Path
 import json
-import os
-import tempfile
 
 import yaml
 
 import geoask as g
+from geoask_runtime import atomic_output
 
 
 def import_region(source: Path, destination: Path, base: g.Settings, *, layer=None,
@@ -35,16 +34,10 @@ def import_region(source: Path, destination: Path, base: g.Settings, *, layer=No
         settings.default_location = point
     settings.cache_dir = (base.cache_dir if base.cache_dir.is_absolute() else g.ROOT / base.cache_dir).resolve()
     payload = json.loads(settings.model_dump_json())
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
     try:
-        # A complete temporary file plus hard-link avoids replacing an existing config.
-        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=destination.parent,
-                                         suffix='.yaml', delete=False) as output:
-            temporary = Path(output.name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with atomic_output(destination, overwrite=False) as output:
             yaml.safe_dump(payload, output, allow_unicode=True, sort_keys=False)
-        os.link(temporary, destination)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    except OSError as exc:
+        raise g.GeoaskError("无法保存地区配置，请选择可写目录和未使用的文件名。") from exc
     return destination, count, named

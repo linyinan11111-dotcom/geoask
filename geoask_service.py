@@ -5,6 +5,8 @@ import csv
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
+import hashlib
+from geoask_runtime import atomic_output
 
 import geoask as g
 import geoask_places as places
@@ -16,7 +18,7 @@ class QueryRequest:
     center: tuple[float, float]
     radius: float
     limit: int
-    config_path: Path = g.ROOT / "config.yaml"
+    config_path: Path = g.DEFAULT_CONFIG
     api_key: str = field(default="", repr=False)
     llm: g.LLMSettings | None = None
     demo: bool = False
@@ -96,14 +98,22 @@ class QueryEngine:
         if self.con is not None:
             self.con.close()
         self.con = self.mapper = self.signature = None
+        self.categories, self.data_count = [], 0
 
     def _prepare(self, settings: g.Settings, progress: Callable[[str], None], need_mapper=True):
         if not settings.geojson_path.is_file():
             raise g.GeoaskError(f"数据文件不存在：{settings.geojson_path}")
-        stat = settings.geojson_path.stat()
         catalog = settings.place_catalog_path
-        catalog_stat = (catalog.stat().st_mtime_ns, catalog.stat().st_size) if catalog and catalog.is_file() else None
-        signature = (settings.model_dump_json(exclude={"llm"}), stat.st_mtime_ns, stat.st_size, catalog_stat)
+        # A same-size replacement can preserve timestamps. Hash the small regional
+        # files; map/routing/default-input changes do not invalidate spatial data.
+        def fingerprint(path):
+            if path is None or not path.is_file():
+                return None
+            with path.open("rb") as stream:
+                return hashlib.file_digest(stream, "sha256").hexdigest()
+        signature = (settings.model_dump_json(exclude={"llm", "map", "routing", "parking",
+                       "default_location", "default_radius", "limit"}),
+                     fingerprint(settings.geojson_path), fingerprint(catalog))
         if signature == self.signature:
             if need_mapper and self.mapper is None:
                 if not self.categories:
@@ -145,22 +155,23 @@ class QueryEngine:
                 intent = g.parse_intent(request.query, llm, client)
         else:
             intent = g.parse_intent(request.query, llm)
-        self._prepare(settings, progress, need_mapper=not intent.place_name)
+        g.validate_resolved_intent(intent, request.query)
+        self._prepare(settings, progress, need_mapper=g.needs_mapper(intent))
         if intent.place_name:
             stop = self._choose_stops([intent], request, progress, settings=settings)[0]
             return QueryResult(request, intent, stop.match, list(self.categories), stop.candidates,
                                stop.sql, stop.params, self.data_count, [stop])
         progress("正在匹配地点类别…")
-        if self.mapper is None:
+        if self.mapper is None and g.needs_mapper(intent):
             raise g.GeoaskError("当前数据没有类别信息，请查询具体地点名称，或在字段映射中配置类别字段。")
-        match = self.mapper.match(intent.intent)
+        match = g.match_intent(intent, self.categories, settings, self.mapper)
         sql, params, rows = "", [], []
         if match.category is not None:
-            sql, params = g.build_query(match.category, request.center, request.radius, request.limit,
+            sql, params = g.build_query(match.query_category, request.center, request.radius, request.limit,
                                         include_coordinates=True)
             if not request.dry_run:
                 progress("正在查找附近地点…")
-                rows = g.search(self.con, match.category, request.center, request.radius, request.limit,
+                rows = g.search(self.con, match.query_category, request.center, request.radius, request.limit,
                                 include_coordinates=True)
         return QueryResult(request, intent, match, list(self.categories), rows, sql, params, self.data_count)
 
@@ -178,7 +189,9 @@ class QueryEngine:
                 plan = g.parse_plan(request.query, llm, client)
         else:
             plan = g.parse_plan(request.query, llm)
-        self._prepare(settings, progress, need_mapper=any(not i.place_name for i in plan.stops))
+        for intent in plan.stops:
+            g.validate_resolved_intent(intent, request.query if len(plan.stops) == 1 else "")
+        self._prepare(settings, progress, need_mapper=any(g.needs_mapper(i) for i in plan.stops))
         stops = self._choose_stops(plan.stops, request, progress, settings=settings)
         first = stops[0]
         return QueryResult(request, first.intent, first.match, list(self.categories), first.candidates,
@@ -194,8 +207,7 @@ class QueryEngine:
         for intent in intents:
             progress(f"正在为第 {len(stops) + 1} 站“{intent.place_name or intent.intent}”查找地点…")
             match = (g.CategoryMatch(None, "按名称查找", 0, 0) if intent.place_name
-                     else g.CategoryMatch(None, "当前数据没有类别信息", 0, 0) if self.mapper is None
-                     else self.mapper.match(intent.intent))
+                     else g.match_intent(intent, self.categories, settings, self.mapper))
             sql, params, candidates, reason = "", [], [], ""
             selected_index = None
             if center is None:
@@ -218,9 +230,9 @@ class QueryEngine:
                 reason = ("当前数据没有类别信息，请输入具体地点名称或配置类别字段。" if self.mapper is None else
                           f"类别匹配不足（{match.best_candidate}, {match.similarity:.3f}），未自动替换为其他类别。")
             else:
-                sql, params = g.build_query(match.category, center, request.radius, request.limit, include_coordinates=True)
+                sql, params = g.build_query(match.query_category, center, request.radius, request.limit, include_coordinates=True)
                 if not request.dry_run:
-                    candidates = g.search(self.con, match.category, center, request.radius, request.limit, include_coordinates=True)
+                    candidates = g.search(self.con, match.query_category, center, request.radius, request.limit, include_coordinates=True)
                     if not candidates:
                         reason = "前一站附近没有匹配地点，请增大半径或更换前一站地点。"
                     else:
@@ -238,7 +250,7 @@ class QueryEngine:
         if not 0 <= candidate_index < len(stop.candidates):
             raise g.GeoaskError("请选择有效的候选地点。")
         settings = g.read_settings(result.request.config_path)
-        self._prepare(settings, progress, need_mapper=any(not s.intent.place_name for s in result.stops))
+        self._prepare(settings, progress, need_mapper=any(g.needs_mapper(s.intent) for s in result.stops))
         prefix = [*result.stops[:stop_index], replace(stop, selected_index=candidate_index, blocked_reason="")]
         remaining = [s.intent for s in result.stops[stop_index+1:]]
         stops = self._choose_stops(remaining, result.request, progress, prefix, settings=settings)
@@ -267,7 +279,7 @@ def export_csv(path: Path, result: QueryResult):
         value = str(value or "")
         return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
 
-    with path.open("w", encoding="utf-8-sig", newline="") as output:
+    with atomic_output(path, encoding="utf-8-sig", newline="") as output:
         writer = csv.writer(output)
         writer.writerow(["名称", "类别", "距离（米）", "WGS84 经度", "WGS84 纬度"])
         rows = [s.selected for s in result.stops if s.selected] if result.stops else result.rows

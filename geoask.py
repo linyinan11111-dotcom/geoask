@@ -5,6 +5,8 @@ import hashlib
 import json
 import math
 import os
+import re
+from zipfile import BadZipFile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
@@ -15,8 +17,19 @@ import numpy as np
 import yaml
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from geoask_resources import resource_file, __version__
+from geoask_runtime import atomic_output, get_logger, user_cache_dir
+from geoask_credentials import saved_api_key, LocalSettingsError
 
 ROOT = Path(__file__).resolve().parent
+SOURCE_CONFIG = ROOT / "config.yaml"
+USING_BUNDLED_CONFIG = not SOURCE_CONFIG.is_file()
+DEFAULT_CONFIG = resource_file("config.yaml") if USING_BUNDLED_CONFIG else SOURCE_CONFIG
+
+
+def location_script():
+    source = ROOT / "scripts" / "get_location.ps1"
+    return source if source.is_file() else resource_file("scripts", "get_location.ps1")
 
 
 class GeoaskError(Exception):
@@ -26,7 +39,7 @@ class GeoaskError(Exception):
 class GeoIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     intent: str = Field(min_length=1, max_length=100)
-    modifiers: list[str]
+    modifiers: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(max_length=16)
     # Keep a user's explicit destination separate from an activity/category.
     place_name: str | None = Field(default=None, min_length=1, max_length=200)
     place_candidates: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=4)
@@ -42,7 +55,7 @@ class MapSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tile_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     attribution: str = "© OpenStreetMap contributors"
-    user_agent: str = "geoask/0.2 (local desktop nearby search)"
+    user_agent: str = f"geoask/{__version__} (local desktop nearby search)"
 
     @field_validator("tile_url")
     @classmethod
@@ -122,6 +135,13 @@ class Settings(BaseModel):
     place_catalog_source_crs: str = "EPSG:4326"
     place_aliases: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator("place_aliases")
+    @classmethod
+    def valid_aliases(cls, value):
+        if any(not key.strip() or not target.strip() for key, target in value.items()):
+            raise ValueError("地名别名及其目标名称不能为空，请删除空映射或填写真实名称。")
+        return value
+
     @field_validator("default_location")
     @classmethod
     def valid_location(cls, value: tuple[float, float]) -> tuple[float, float]:
@@ -137,16 +157,28 @@ def validate_location(lon: float, lat: float) -> None:
 
 def read_settings(path: Path) -> Settings:
     try:
-        settings = Settings.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+        path = Path(path).expanduser().resolve()
+        payload = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise GeoaskError("配置内容必须是 YAML 键值对象，不能是列表、布尔值或字符串。")
+        settings = Settings.model_validate(payload)
+    except UnicodeError as exc:
+        raise GeoaskError("无法读取配置：请将 YAML 文件另存为 UTF-8 编码。") from exc
     except (OSError, yaml.YAMLError, ValidationError) as exc:
-        raise GeoaskError(f"无法读取配置 {path}: {exc}") from exc
+        raise GeoaskError(f"无法读取配置 {path}，请检查文件权限、YAML 格式和字段值。") from exc
     for attr in ("geojson_path", "cache_dir", "place_catalog_path", "place_catalog_for"):
         value = getattr(settings, attr)
-        if value is not None and not value.is_absolute():
-            setattr(settings, attr, (path.resolve().parent / value).resolve())
+        if value is not None:
+            value = value.expanduser()
+            setattr(settings, attr, (value if value.is_absolute() else path.parent / value).resolve())
     if settings.place_catalog_for and settings.geojson_path.resolve() != settings.place_catalog_for.resolve():
         settings.place_catalog_path = None
         settings.place_aliases = {}
+    if USING_BUNDLED_CONFIG and path == DEFAULT_CONFIG.resolve():
+        # Installed resources may be read-only. Models, tiles and vectors are user data.
+        settings.cache_dir = user_cache_dir()
     return settings
 
 
@@ -169,17 +201,53 @@ def quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def resolve_layer(con, path, requested):
+    """Never send an unchecked layer to GDAL: some builds crash in native code."""
+    try:
+        rows = con.execute("SELECT layers FROM ST_Read_Meta(?)", [str(path)]).fetchall()
+    except duckdb.Error as exc:
+        get_logger().exception("Could not inspect spatial dataset")
+        raise GeoaskError("无法读取空间文件，请核对文件格式、完整性及访问权限；损坏文件请重新导出。") from exc
+    layers = [item["name"] for row in rows for item in (row[0] or [])]
+    if not layers:
+        raise GeoaskError("文件中没有可读取图层，请核对文件格式和完整性，选择包含空间要素的数据文件。")
+    if requested is None or not requested.strip():
+        return layers[0]
+    if requested in layers:
+        return requested
+    matches = [name for name in layers if name.casefold() == requested.strip().casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    raise GeoaskError(f"图层“{requested}”不存在或名称不唯一；可用图层：{'、'.join(layers)}。请修改图层配置。")
+
+
 def source_select(con, path, layer, fields, source_crs):
+    try:
+        return _source_select(con, path, layer, fields, source_crs)
+    except duckdb.Error as exc:
+        get_logger().exception("Spatial source field inspection failed")
+        raise GeoaskError("无法读取空间字段，请核对文件完整性、图层和字段映射；几何字段须为真实空间几何。") from exc
+
+
+def _source_select(con, path, layer, fields, source_crs):
     """One validated adapter for primary data and optional regional name catalogues."""
-    source = "ST_Read(?, layer = ?)" if layer else "ST_Read(?)"
-    params = [str(path)] + ([layer] if layer else [])
+    layer = resolve_layer(con, path, layer)
+    source = "ST_Read(?, layer = ?)"
+    params = [str(path), layer]
     cols = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM {source}", params).fetchall())
+    by_case = {c.casefold(): c for c in cols}
+    fields = fields.model_copy(update={
+        attr: by_case.get(value.casefold(), value) if value else value
+        for attr, value in (("name", fields.name), ("category", fields.category), ("geometry", fields.geometry))
+    } | {"aliases": [by_case.get(c.casefold(), c) for c in fields.aliases]})
     required = {fields.name, fields.geometry, *fields.aliases}
     if fields.category:
         required.add(fields.category)
     missing = required - cols.keys()
     if missing:
         raise GeoaskError(f"字段映射不存在: {sorted(missing)}；可用字段: {sorted(cols)}")
+    if not cols[fields.geometry].startswith("GEOMETRY"):
+        raise GeoaskError("几何字段不是空间几何类型，请选择正确的 geometry/geom 字段，或重新导出空间文件。")
     # OSM and typical GIS exports: automatically preserve multilingual and alias labels.
     common = {'alt_name', 'short_name', 'official_name', 'old_name', 'loc_name', 'int_name', 'aliases', 'alias'}
     alias_fields = sorted(set(fields.aliases) | {c for c in cols if c != fields.name and (
@@ -190,8 +258,13 @@ def source_select(con, path, layer, fields, source_crs):
         if cols[column].endswith('[]'):
             expressions.append(f"list_transform(coalesce({quoted}, []), x -> CAST(x AS VARCHAR))")
         else:
-            expressions.append(f"regexp_split_to_array(coalesce(CAST({quoted} AS VARCHAR), ''), '[;；|]')")
+            # GDAL may expose arrays containing nulls as JSON text instead of lists.
+            expressions.append(f"coalesce(TRY_CAST({quoted} AS VARCHAR[]), "
+                               f"regexp_split_to_array(coalesce(CAST({quoted} AS VARCHAR), ''), '[;；|]'))")
     aliases = "list_concat(" + ', '.join(expressions) + ")" if expressions else "[]::VARCHAR[]"
+    # Split every item too: GDAL promotes scalar 'A;B' to ['A;B'] in mixed columns.
+    aliases = f"flatten(list_transform({aliases}, x -> regexp_split_to_array(x, '[;；|]')))"
+    aliases = f"list_distinct(list_filter(list_transform({aliases}, x -> trim(x)), x -> x IS NOT NULL AND x <> ''))"
     name, geometry = map(quote_identifier, (fields.name, fields.geometry))
     category = f"CAST({quote_identifier(fields.category)} AS VARCHAR)" if fields.category else "NULL::VARCHAR"
     sql = f"""SELECT CAST({name} AS VARCHAR) AS name, {category} AS category,
@@ -210,16 +283,20 @@ def load_data(settings: Settings) -> duckdb.DuckDBPyConnection:
         con.execute("CREATE TABLE source_places AS " + sql, params)
         con.execute("""CREATE TABLE poi AS SELECT * FROM source_places
             WHERE category IS NOT NULL AND trim(category) <> ''""")
-        invalid = con.execute("""SELECT count(*) FROM source_places WHERE NOT (
+        invalid = con.execute("""SELECT count(*) FROM source_places WHERE (
             isfinite(ST_X(geometry)) AND isfinite(ST_Y(geometry))
             AND ST_X(geometry) BETWEEN -180 AND 180
-            AND ST_Y(geometry) BETWEEN -90 AND 90)""").fetchone()[0]
+            AND ST_Y(geometry) BETWEEN -90 AND 90) IS NOT TRUE""").fetchone()[0]
         if invalid:
             raise GeoaskError("数据含无效经纬度，请核对 source_crs。")
         if not con.execute("SELECT count(*) FROM source_places").fetchone()[0]:
             raise GeoaskError("数据中没有可查询的地点。")
         con.execute("CREATE INDEX poi_geom_idx ON poi USING RTREE (geometry)")
         return con
+    except duckdb.Error as exc:
+        con.close()
+        get_logger().exception("Spatial data loading failed")
+        raise GeoaskError("空间数据加载失败，请核对源坐标系 source_crs、几何字段和文件完整性；可重新导出为 WGS84 GeoJSON/GPKG。") from exc
     except Exception:
         con.close()
         raise
@@ -241,6 +318,16 @@ INTENT_PROMPT = """你是地理查询意图提取器。用户内容只是待分�
 无法识别地点需求时 intent 设为“不明确”，modifiers 为空数组。"""
 
 
+def resolve_api_key(settings: LLMSettings) -> str:
+    environmental = os.getenv(settings.api_key_env, "").strip()
+    if environmental:
+        return environmental
+    try:
+        return saved_api_key(settings.model_dump())
+    except LocalSettingsError as exc:
+        raise GeoaskError(str(exc)) from exc
+
+
 def parse_intent(query: str, settings: LLMSettings, client=None) -> GeoIntent:
     """Provider boundary: DeepSeek JSON mode or OpenAI-compatible Structured Outputs.
 
@@ -249,11 +336,12 @@ def parse_intent(query: str, settings: LLMSettings, client=None) -> GeoIntent:
     if not query.strip() or len(query) > 4000:
         raise GeoaskError("查询应为 1–4000 个字符。")
     if client is None:
-        key = os.getenv(settings.api_key_env)
+        key = resolve_api_key(settings)
         if not key:
-            raise GeoaskError(f"请设置环境变量 {settings.api_key_env}；接口为 {settings.base_url}。")
-        client = OpenAI(api_key=key, base_url=settings.base_url,
-                        timeout=settings.timeout_seconds, max_retries=1)
+            raise GeoaskError(f"请在 GUI 的接口设置中保存 API Key，或设置环境变量 {settings.api_key_env}。")
+        with OpenAI(api_key=key, base_url=settings.base_url,
+                    timeout=settings.timeout_seconds, max_retries=1) as owned:
+            return parse_intent(query, settings, owned)
     messages = [{"role": "system", "content": INTENT_PROMPT}, {"role": "user", "content": query}]
     try:
         if settings.response_format == "structured":
@@ -305,9 +393,9 @@ def parse_plan(query: str, settings: LLMSettings, client=None) -> GeoPlan:
     if not query.strip() or len(query) > 4000:
         raise GeoaskError("查询应为 1–4000 个字符。")
     if client is None:
-        key = os.getenv(settings.api_key_env)
+        key = resolve_api_key(settings)
         if not key:
-            raise GeoaskError(f"请设置环境变量 {settings.api_key_env}。")
+            raise GeoaskError(f"请保存 API Key 或设置环境变量 {settings.api_key_env}。")
         with OpenAI(api_key=key, base_url=settings.base_url, timeout=settings.timeout_seconds, max_retries=1) as owned:
             return parse_plan(query, settings, owned)
     messages = [{"role": "system", "content": PLAN_PROMPT}, {"role": "user", "content": query}]
@@ -336,6 +424,11 @@ class CategoryMatch:
     best_candidate: str
     similarity: float
     margin: float
+    categories: tuple[str, ...] = ()
+
+    @property
+    def query_category(self):
+        return self.categories or self.category
 
 
 def normalized(vectors) -> np.ndarray:
@@ -363,32 +456,44 @@ class SemanticMapper:
             except Exception as exc:
                 raise GeoaskError("无法加载嵌入模型，请检查模型名称、网络和缓存目录。") from exc
         self.embedder = embedder
-        # Same task prefix on both sides is intentional: short cross-language labels.
-        self.prefix = "query: " if "e5" in settings.embedding_model.lower() else ""
-        payload = json.dumps([settings.embedding_model, self.prefix, self.categories], ensure_ascii=False)
+        is_e5 = "e5" in settings.embedding_model.lower()
+        self.prefix = "query: " if is_e5 else ""
+        self.category_prefix = "passage: " if is_e5 else ""
+        payload = json.dumps([settings.embedding_model, self.prefix, self.category_prefix, self.categories], ensure_ascii=False)
         key = hashlib.sha256(payload.encode()).hexdigest()[:24]
         settings.cache_dir.mkdir(parents=True, exist_ok=True)
-        cache = settings.cache_dir / f"categories-{key}.npy"
+        self.cache = cache = settings.cache_dir / f"categories-{key}.npy"
         self.vectors = None
         if cache.is_file():
             try:
                 vectors = np.load(cache, allow_pickle=False)
-                if vectors.ndim == 2 and vectors.shape[0] == len(self.categories):
+                if isinstance(vectors, np.ndarray) and vectors.ndim == 2 and vectors.shape[0] == len(self.categories) and vectors.shape[1] > 0:
                     self.vectors = normalized(vectors)
-            except (OSError, ValueError, TypeError, GeoaskError):
-                pass
+                elif hasattr(vectors, "close"):
+                    vectors.close()
+            except (OSError, ValueError, TypeError, EOFError, BadZipFile, GeoaskError):
+                get_logger().warning("Rebuilding invalid category cache")
         if self.vectors is None:
-            self.vectors = normalized(embedder.embed([
-                self.prefix + cat.replace("_", " ") for cat in self.categories]))
-            # Atomic replacement avoids partially written caches in concurrent CLI runs.
-            import tempfile
-            with tempfile.NamedTemporaryFile(dir=settings.cache_dir, suffix=".npy", delete=False) as f:
-                temporary = Path(f.name)
-                np.save(f, self.vectors, allow_pickle=False)
-            temporary.replace(cache)
+            self._rebuild_vectors()
+
+    def _rebuild_vectors(self):
+        self.vectors = normalized(self.embedder.embed([
+            self.category_prefix + cat.replace("_", " ") for cat in self.categories]))
+        try:
+            with atomic_output(self.cache, mode="wb") as output:
+                np.save(output, self.vectors, allow_pickle=False)
+        except OSError:
+            get_logger().warning("Could not write category cache; using in-memory vectors")
 
     def match(self, intent: str) -> CategoryMatch:
+        validate_resolved_intent(GeoIntent(intent=intent, modifiers=[]))
+        if is_parking_intent(intent):
+            return parking_match(self.categories, ParkingSettings())
         vector = normalized(self.embedder.embed([self.prefix + intent]))[0]
+        if self.vectors.shape[1] != vector.shape[0]:
+            self._rebuild_vectors()
+        if self.vectors.shape != (len(self.categories), vector.shape[0]):
+            raise GeoaskError("嵌入模型返回的类别和查询向量维度不一致，请检查模型。")
         scores = self.vectors @ vector
         order = np.argsort(-scores, kind="stable")
         best = int(order[0])
@@ -397,6 +502,40 @@ class SemanticMapper:
         accepted = score >= self.threshold and margin >= self.margin_threshold
         return CategoryMatch(self.categories[best] if accepted else None,
                              self.categories[best], score, margin)
+
+
+def validate_resolved_intent(intent: GeoIntent, query: str = ""):
+    """Reserved parser failures and parking must never become unrelated categories."""
+    if intent.place_name:
+        return
+    if intent.intent.strip().casefold() in {"不明确", "未知", "unknown", "unclear", "不明", "无法识别"}:
+        raise GeoaskError("未能理解目的地，请输入具体地点名称或明确的活动类别。")
+
+
+def is_parking_intent(text: str):
+    # Only the parsed destination category, never modifiers or the whole sentence.
+    return bool(re.search(r"停车|停車|车位|車位|\bparking\b|\bcar\s*parks?\b", text, re.I))
+
+
+def needs_mapper(intent: GeoIntent):
+    return not intent.place_name and not is_parking_intent(intent.intent)
+
+
+def parking_match(categories, parking: ParkingSettings):
+    allowed = {category.casefold() for category in parking.categories}
+    available = tuple(sorted(c for c in categories if c.casefold() in allowed))
+    if not available:
+        raise GeoaskError("当前附近查询数据没有汽车停车场类别。请切换为含停车场类别的数据；在 GUI 中也可先选择目的地，再使用停车导航搜索地区补充目录。")
+    return CategoryMatch(available[0], "、".join(available), 1., 2., available)
+
+
+def match_intent(intent, categories, settings, mapper=None):
+    validate_resolved_intent(intent)
+    if is_parking_intent(intent.intent):
+        return parking_match(categories, settings.parking)
+    if mapper is None:
+        return CategoryMatch(None, "当前数据没有类别信息", 0, 0)
+    return mapper.match(intent.intent)
 
 
 def bounding_boxes(lon: float, lat: float, radius: float) -> list[tuple[float, float, float, float]]:
@@ -429,8 +568,9 @@ def build_query(category: str, center: tuple[float, float], radius: float, limit
         raise ValueError("结果数量必须在 [1,1000] 内。")
     parts, params = [], []
     for box in bounding_boxes(lon, lat, radius):
+        category_predicate = "category IN (SELECT unnest(?::VARCHAR[]))" if isinstance(category, (list, tuple)) else "category = ?"
         parts.append("SELECT name, category, geometry FROM poi "
-                     "WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?)) AND category = ?")
+                     "WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?)) AND " + category_predicate)
         params.extend([*box, category])
     coordinates = ", ST_X(geometry) AS longitude, ST_Y(geometry) AS latitude" if include_coordinates else ""
     result_coordinates = ", longitude, latitude" if include_coordinates else ""
@@ -450,7 +590,8 @@ LIMIT ?"""
 
 def search(con, category: str, center: tuple[float, float], radius: float, limit: int = 10,
            *, include_coordinates: bool = False):
-    if not con.execute("SELECT EXISTS(SELECT 1 FROM poi WHERE category = ?)", [category]).fetchone()[0]:
+    values = list(category) if isinstance(category, (tuple, list)) else [category]
+    if not con.execute("SELECT EXISTS(SELECT 1 FROM poi WHERE category IN (SELECT unnest(?::VARCHAR[])))", [values]).fetchone()[0]:
         raise GeoaskError("查询类别不在数据集中。")
     sql, params = build_query(category, center, radius, limit, include_coordinates=include_coordinates)
     rows = con.execute(sql, params).fetchall()
@@ -472,7 +613,7 @@ def near_callback(ctx, param, value):
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("query")
 @click.option("--config", "config_path", type=click.Path(path_type=Path, dir_okay=False),
-              default=ROOT / "config.yaml", show_default=True)
+              default=DEFAULT_CONFIG, show_default=True)
 @click.option("--near", callback=near_callback, help="WGS84 经度,纬度；默认读取配置。")
 @click.option("--radius", type=click.FloatRange(min=0, max=100_000, min_open=True), help="半径，单位米。")
 @click.option("--limit", type=click.IntRange(1, 1000), help="最多返回多少条结果。")
@@ -486,7 +627,9 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         center = near if near is not None else settings.default_location
         radius = radius if radius is not None else settings.default_radius
         limit = limit if limit is not None else settings.limit
+        build_query("validation", center, radius, limit)
         intent = parse_intent(query, settings.llm)
+        validate_resolved_intent(intent, query)
         con = load_data(settings)
         if intent.place_name:
             from geoask_places import build_place_query, search_place
@@ -505,7 +648,7 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
             for i, row in enumerate(results, 1):
                 click.echo(f"  {i}. {row['name']}  [{row['category']}]  {row['dist_m']:.0f}m")
             if not results:
-                click.echo("当前数据及地名目录中未找到该目的地；请补充完整名称或切换数据。")
+                raise GeoaskError("当前数据及地名目录中未找到该目的地；请补充完整名称或切换数据。")
             elif results[0]['name_match_count'] > 1:
                 click.echo(f"存在 {results[0]['name_match_count']} 个名称候选，请补充完整名称或在 GUI 选择具体地点。")
             elif results[0]['name_rank'] > 0:
@@ -514,7 +657,8 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         categories = [r[0] for r in con.execute("SELECT DISTINCT category FROM poi ORDER BY category").fetchall()]
         if not categories:
             raise GeoaskError("当前数据没有类别信息，请输入具体地点名称或配置类别字段。")
-        match = SemanticMapper(categories, settings).match(intent.intent)
+        mapper = SemanticMapper(categories, settings) if needs_mapper(intent) else None
+        match = match_intent(intent, categories, settings, mapper)
         if explain or dry_run:
             click.echo("理解过程:")
             click.echo(f"  意图词: {intent.intent}")
@@ -526,18 +670,18 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         if match.category is None:
             click.echo("未找到足够可信的类别匹配；请换一个更明确的地点类别。")
             click.echo("可用类别: " + ", ".join(categories))
-            return
+            raise GeoaskError("类别匹配失败。")
         if dry_run:
-            sql, params = build_query(match.category, center, radius, limit)
+            sql, params = build_query(match.query_category, center, radius, limit)
             click.echo("SQL（占位符与参数分开；未执行邻近查询）:\n" + sql)
             click.echo("绑定参数: " + json.dumps(params, ensure_ascii=False))
             return
-        results = search(con, match.category, center, radius, limit)
+        results = search(con, match.query_category, center, radius, limit)
         click.echo(f"结果 ({len(results)} 条):")
         for i, row in enumerate(results, 1):
             click.echo(f"  {i}. {row['name'] or '(未命名地点)'}  [{row['category']}]  {row['dist_m']:.0f}m")
         if not results:
-            click.echo("该半径内没有匹配地点，可尝试增大 --radius。")
+            raise GeoaskError("该半径内没有匹配地点，可尝试增大 --radius。")
     except (GeoaskError, duckdb.Error, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import math
 import os
+import re
 import subprocess
 
 import geoask as g
@@ -27,7 +28,9 @@ def parse_device_location(data: dict) -> DeviceLocation:
         lon, lat = float(data["longitude"]), float(data["latitude"])
         g.validate_location(lon, lat)
         timestamp = str(data["timestamp"])
-        captured = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        # .NET round-trip format has seven fractional digits; accept older Python too.
+        normalized = re.sub(r"(\.\d{6})\d+(?=Z|[+-]|$)", r"\1", timestamp)
+        captured = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
         if captured.tzinfo is None or abs((datetime.now(timezone.utc) - captured).total_seconds()) > 300:
             raise ValueError("stale location")
         accuracy = float(data["accuracy_m"]) if data.get("accuracy_m") is not None else None
@@ -43,7 +46,7 @@ def get_device_location(runner=None) -> DeviceLocation:
         raise g.GeoaskError("当前设备定位实现支持 Windows；请在经纬度框中手动输入坐标。")
     try:
         result = (runner or subprocess.run)(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(g.ROOT / "scripts" / "get_location.ps1")],
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(g.location_script())],
             capture_output=True, text=True, encoding="utf-8-sig", timeout=30,
             creationflags=subprocess.CREATE_NO_WINDOW, check=True)
         return parse_device_location(json.loads(result.stdout.strip()))

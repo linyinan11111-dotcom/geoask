@@ -11,6 +11,14 @@ class ParkingOptions:
     result: QueryResult = field(repr=False)
     radius: float
     candidates: list[dict]
+    total_count: int = 0
+
+    @property
+    def summary(self):
+        shown = len(self.candidates)
+        total = self.total_count or shown
+        return (f"找到 {total} 个停车场，显示最近 {shown} 个；可缩小半径或增大“最多结果”。"
+                if total > shown else f"找到 {shown} 个停车场。")
 
     @property
     def destination(self):
@@ -28,11 +36,16 @@ def find_parking(con, result: QueryResult, radius: float, settings: g.Settings):
         SELECT name, category, ST_X(geometry) AS longitude, ST_Y(geometry) AS latitude,
                ST_Distance_Spheroid(geometry, ST_Point(?, ?)) AS dist_m
         FROM named_places WHERE category IN (SELECT unnest(?::VARCHAR[]))
-    ) SELECT DISTINCT name, category, dist_m, longitude, latitude FROM distances
-      WHERE dist_m <= ? ORDER BY dist_m, name NULLS LAST, category LIMIT ?"""
+    ), candidates AS (
+        SELECT DISTINCT name, category, dist_m, longitude, latitude FROM distances WHERE dist_m <= ?
+    ) SELECT *, count(*) OVER () AS total_count FROM candidates
+      ORDER BY dist_m, name NULLS LAST, category, longitude, latitude LIMIT ?"""
     cursor = con.execute(sql, [*center, settings.parking.categories, radius, result.request.limit])
     rows = [dict(zip([d[0] for d in cursor.description], row)) for row in cursor.fetchall()]
-    return ParkingOptions(result, radius, rows)
+    total = rows[0]['total_count'] if rows else 0
+    for row in rows:
+        row.pop('total_count')
+    return ParkingOptions(result, radius, rows, total)
 
 
 def parking_route_points(options: ParkingOptions, candidate_index: int):

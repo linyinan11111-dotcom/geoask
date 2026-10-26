@@ -1,0 +1,26 @@
+{
+  "verified_at": "2026-10-23T03:00:15.277613+00:00",
+  "source": "dated Geofabrik archive; fixed SHA256 checked by source_data",
+  "script_sha256": {
+    "data_pipeline.py": "1e37cfd24cfeaeead8a2959d4ff73e3b26d342c057961486af082f8f270beca7",
+    "prepare_data.py": "076908184624108f7e8037b5523c662b6e6acabe2d3206111f5e97462aadd722",
+    "prepare_places.py": "2c0a9c609e284af3a2bbd1b8ee1cb481c81e5bdc93b1122d7de88e626f0e0f03",
+    "verify_data.py": "0463f1074addca78c87b9ce17b2de5e45f0120bfcc7f07e4519d53d78f6af06e"
+  },
+  "datasets": {
+    "beijing_poi.gpkg": {
+      "rows": 415,
+      "sha256": "cfd11957975e81bbf7b780e4adeadb29cf552647cee74c0b8dbed37263b55606",
+      "manifest_matches": true,
+      "bundled_content_statistics_match": true
+    },
+    "beijing_places.gpkg": {
+      "rows": 29131,
+      "sha256": "08ebc3dbf8353cb99e6afef4b1bd8e67ca42b8236813c2e9591a4c73469bca30",
+      "manifest_matches": true,
+      "bundled_content_statistics_match": true
+    }
+  },
+  "bundled_files_unchanged": true,
+  "passed": true
+}

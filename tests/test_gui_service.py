@@ -1,5 +1,6 @@
 """Test the desktop query boundary without opening windows or calling paid APIs."""
 import csv
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -29,7 +30,7 @@ def test_demo_real_spatial_results_coordinates_and_reuse(engine, monkeypatch):
     monkeypatch.setattr(g, "parse_intent", lambda *a, **kw: pytest.fail("Demo called an LLM"))
     statuses = []
     result = engine.run(request(demo=True), statuses.append)
-    assert result.rows and result.data_count == 415
+    assert result.rows and result.data_count == json.loads((g.ROOT / "data/manifest.json").read_text())["rows"]
     assert "固定" in result.note
     assert all(-180 <= r["longitude"] <= 180 and -90 <= r["latitude"] <= 90 for r in result.rows)
     assert result.rows[0]["dist_m"] < 1000

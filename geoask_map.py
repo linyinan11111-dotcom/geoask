@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from PIL import Image, ImageTk
 
 import geoask as g
+from geoask_runtime import atomic_output, drain_events, get_logger, user_cache_dir
 
 
 def world_pixel(lon, lat, zoom):
@@ -30,6 +31,69 @@ def pixel_coordinate(x, y, zoom):
             math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * max(0, min(size, y)) / size)))))
 
 
+def validate_tile(data):
+    if len(data) > 2_000_000:
+        raise ValueError("Tile too large")
+    with Image.open(BytesIO(data)) as image:
+        if image.size != (256, 256):
+            raise ValueError("XYZ tile must be 256x256")
+        image.verify()
+    # verify() alone does not decode JPEG pixels and accepts some truncated files.
+    with Image.open(BytesIO(data)) as image:
+        image.load()
+
+
+def fetch_tile(path, settings, z, x, y, opener=None):
+    """Cache failures never discard a successfully downloaded, valid tile."""
+    try:
+        if path.is_file() and time.time() - path.stat().st_mtime < 7*86400:
+            data = path.read_bytes()
+            validate_tile(data)
+            return data
+    except (OSError, ValueError, SyntaxError):
+        get_logger().warning("Ignoring unreadable or invalid cached tile")
+    request = Request(settings.tile_url.format(z=z, x=x, y=y), headers={"User-Agent": settings.user_agent})
+    with (opener or urlopen)(request, timeout=12) as response:
+        data = response.read(2_000_001)
+    validate_tile(data)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with atomic_output(path, mode="wb") as output:
+            output.write(data)
+    except OSError:
+        get_logger().warning("Tile cache write failed; displaying downloaded image")
+    return data
+
+
+def prune_tile_cache(directory, *, max_bytes=128*1024*1024, max_age=7*86400):
+    """Evict expired files then oldest files until the disk budget is met."""
+    entries = []
+    now = time.time()
+    try:
+        for path in Path(directory).rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+                if now-stat.st_mtime > max_age:
+                    path.unlink(missing_ok=True)
+                elif path.suffix == ".png":
+                    entries.append((stat.st_mtime, stat.st_size, path))
+            except OSError:
+                get_logger().warning("Could not inspect/remove a cached tile; continuing")
+    except OSError:
+        get_logger().warning("Could not enumerate tile cache")
+    total = sum(size for _, size, _ in entries)
+    for _, size, path in sorted(entries):
+        if total <= max_bytes:
+            break
+        try:
+            path.unlink(missing_ok=True)
+            total -= size
+        except OSError:
+            get_logger().warning("Could not remove a cached tile; continuing")
+
+
 class SlippyMap(tk.Canvas):
     def __init__(self, parent, on_marker=None, on_position=None, **kwargs):
         super().__init__(parent, bg="#e9f0eb", highlightthickness=0, **kwargs)
@@ -40,7 +104,7 @@ class SlippyMap(tk.Canvas):
         self.pending, self.failed = set(), {}
         self.jobs, self.completed = Queue(maxsize=32), Queue()
         self.settings = g.MapSettings()
-        self.cache_dir = g.ROOT / ".cache" / "tiles"
+        self.cache_dir = user_cache_dir() / "tiles"
         self.generation = 0
         self.tiles_loaded, self.tile_error = 0, ""
         self.closed = False
@@ -65,6 +129,7 @@ class SlippyMap(tk.Canvas):
 
     def configure_map(self, settings: g.MapSettings, cache_dir: Path):
         self.settings, self.cache_dir = settings, cache_dir
+        Thread(target=prune_tile_cache, args=(cache_dir,), daemon=True, name="geoask-tile-cleanup").start()
         self.provider = hashlib.sha256(settings.tile_url.encode()).hexdigest()[:16]
         self.generation += 1
         self.photos.clear()
@@ -86,8 +151,9 @@ class SlippyMap(tk.Canvas):
         width, height = max(200, self.winfo_width()), max(150, self.winfo_height())
         # Unwrap longitude around the first point to fit date-line itineraries.
         anchor = points[0][0]
-        normalized = [(anchor + (lon-anchor+180) % 360-180, lat) for lon, lat in points]
-        for zoom in range(18, 1, -1):
+        normalized = [(anchor + math.remainder(lon-anchor, 360), lat) for lon, lat in points]
+        max_zoom = 15 if len(set(points)) == 1 else 18
+        for zoom in range(max_zoom, 1, -1):
             pixels = [world_pixel(lon, lat, zoom) for lon, lat in normalized]
             xs, ys = [p[0] for p in pixels], [p[1] for p in pixels]
             if max(xs)-min(xs) < width-120 and max(ys)-min(ys) < height-100:
@@ -207,63 +273,48 @@ class SlippyMap(tk.Canvas):
             key, settings, directory = job
             _, z, x, y = key
             path = directory / str(z) / str(x) / f"{y}.png"
-            data = None
             try:
-                # Cache only tiles actually requested by the visible viewport; no prefetch.
-                if path.is_file() and time.time()-path.stat().st_mtime < 7*86400:
-                    data = path.read_bytes()
-                if data is None:
-                    request = Request(settings.tile_url.format(z=z, x=x, y=y), headers={"User-Agent": settings.user_agent})
-                    with urlopen(request, timeout=12) as response:
-                        data = response.read(2_000_001)
-                    if len(data) > 2_000_000:
-                        raise ValueError("Tile too large")
-                with Image.open(BytesIO(data)) as image:
-                    if image.size != (256, 256):
-                        raise ValueError("XYZ tile must be 256x256")
-                    image.verify()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                # Keep the cache timestamp on hits so it eventually expires.
-                if not path.is_file() or time.time()-path.stat().st_mtime >= 7*86400:
-                    temporary = path.with_suffix(".partial")
-                    temporary.write_bytes(data)
-                    temporary.replace(path)
+                data = fetch_tile(path, settings, z, x, y)
                 self.completed.put((key, data))
             except Exception:
-                # Discard a corrupt cache image so later retries can fetch a new tile.
-                if path.is_file() and data is not None:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
+                get_logger().exception("Tile download failed (%s/%s/%s)", z, x, y)
                 self.completed.put((key, None))
+
+    def _handle_tile(self, event):
+        key, data = event
+        self.pending.discard(key)
+        if key[0] != self.generation:
+            return
+        if data:
+            try:
+                with Image.open(BytesIO(data)) as image:
+                    self.photos[key] = ImageTk.PhotoImage(image.convert("RGB"), master=self)
+            except Exception:
+                self.failed[key] = time.monotonic()+45
+                self.tile_error = "unavailable"
+                raise
+            self.tiles_loaded += 1
+            self.tile_error = ""
+            while len(self.photos) > 100:
+                self.photos.popitem(last=False)
+        else:
+            self.failed[key] = time.monotonic()+45
+            self.tile_error = "unavailable"
+
+    def _tile_error(self):
+        self.tile_error = "unavailable"
 
     def _poll(self):
         if self.closed:
             return
-        changed = False
         try:
-            while True:
-                key, data = self.completed.get_nowait()
-                self.pending.discard(key)
-                if key[0] != self.generation:
-                    continue
-                if data:
-                    with Image.open(BytesIO(data)) as image:
-                        self.photos[key] = ImageTk.PhotoImage(image.convert("RGB"), master=self)
-                    self.tiles_loaded += 1
-                    self.tile_error = ""
-                    while len(self.photos) > 100:
-                        self.photos.popitem(last=False)
-                else:
-                    self.failed[key] = time.monotonic()+45
-                    self.tile_error = "unavailable"
-                changed = True
-        except Empty:
-            pass
-        if changed:
-            self.redraw()
-        self.after(100, self._poll)
+            if drain_events(self.completed, self._handle_tile, self._tile_error):
+                self.redraw()
+        except Exception:
+            get_logger().exception("Map redraw failed")
+        finally:
+            if not self.closed:
+                self.after(100, self._poll)
 
     def close(self):
         self.closed = True

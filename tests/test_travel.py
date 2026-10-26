@@ -75,8 +75,9 @@ def test_itinerary_sequential_search_and_reselection(engine, monkeypatch):
     assert first.selected["category"] == "cafe" and second.selected["category"] == "fitness_centre"
     assert second.center == (first.selected["longitude"], first.selected["latitude"])
     assert len(route_points(result)) == 3
-    changed = engine.reselect(result, 0, 2)
-    assert changed.stops[0].selected == result.stops[0].candidates[2]
+    alternative = next((i for i in range(len(first.candidates)) if i != first.selected_index), first.selected_index)
+    changed = engine.reselect(result, 0, alternative)
+    assert changed.stops[0].selected == first.candidates[alternative]
     assert changed.stops[1].center == (changed.stops[0].selected["longitude"], changed.stops[0].selected["latitude"])
     assert result.stops[0].selected_index == 0  # Old result remains immutable.
 
@@ -141,6 +142,8 @@ def test_route_api_uses_real_mode_and_preserves_waypoints(mode, costing):
         return BytesIO(json.dumps(data).encode())
     route = plan_road_route(points, mode, g.RoutingSettings(), opener)
     assert seen[0]["costing"] == costing
+    assert seen[0]["directions_options"] == {"language": "zh-CN", "units": "kilometers"}
+    assert "language" not in seen[0] and "units" not in seen[0]
     assert [(p["lon"],p["lat"]) for p in seen[0]["locations"]] == points
     assert route.coordinates == points and len(route.legs) == 2
     assert route.distance_m == 1400 and route.duration_s == 1000

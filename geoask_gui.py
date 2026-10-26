@@ -16,6 +16,8 @@ from geoask_map import SlippyMap
 from geoask_location import get_device_location
 from geoask_routing import MODE_NAMES, plan_road_route
 from geoask_parking import parking_route_points
+from geoask_runtime import drain_events, get_logger
+import geoask_credentials as credentials
 
 BG = "#f3f6f5"
 WHITE = "#ffffff"
@@ -35,8 +37,53 @@ def distance_label(value: float) -> str:
     return f"{value:,.0f} 米" if value < 1000 else f"{value / 1000:.2f} 公里"
 
 
+def result_status(result):
+    if result.request.dry_run:
+        return "查询预览已生成，尚未选择地点。"
+    if any(s.candidates and s.selected is None for s in result.stops):
+        return "请选择具体地点，确认后再规划路线。"
+    if result.stops and all(s.selected for s in result.stops):
+        return "地点选择已完成，支持在行程中更换候选地点。"
+    return "尚未选定全部地点，请查看提示并调整查询。"
+
+
+def result_map_points(result, active_stop):
+    points = [result.request.center]
+    points.extend((s.selected["longitude"], s.selected["latitude"]) for s in result.stops if s.selected)
+    if 0 <= active_stop < len(result.stops):
+        points.extend((p["longitude"], p["latitude"]) for p in result.stops[active_stop].candidates)
+    return points
+
+
+def validate_settings_form(fields, response_format, map_fields, llm_timeout, routing_timeout):
+    from urllib.parse import urlsplit
+    values = {k: v for k, v in fields.items() if k != "api_key"}
+    if any(not value for value in values.values()):
+        raise ValueError("请填写接口地址、模型名称和密钥环境变量。")
+    parsed = urlsplit(values["base_url"])
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("接口地址需要是有效的 HTTP(S) URL，请勿在 URL 中填写密钥。")
+    llm = g.LLMSettings(**values, response_format=response_format, timeout_seconds=llm_timeout)
+    maps = g.MapSettings(**{k: v for k, v in map_fields.items() if k != "endpoint"})
+    routing = g.RoutingSettings(endpoint=map_fields["endpoint"], timeout_seconds=routing_timeout)
+    return llm, maps, routing, fields["api_key"]
+
+
+def settings_error_message(exc):
+    if isinstance(exc, g.ValidationError):
+        labels = {"tile_url": "底图地址", "endpoint": "路径接口", "model": "模型名称",
+                  "response_format": "返回格式", "timeout_seconds": "超时时间"}
+        error = exc.errors(include_url=False)[0]
+        label = labels.get(error["loc"][-1] if error["loc"] else "", "接口配置")
+        # Custom validators provide actionable Chinese messages; numeric/type
+        # errors are summarized without Pydantic's English internals or inputs.
+        cause = error.get("ctx", {}).get("error")
+        return str(cause) if cause else f"{label}无效，请检查填写的格式和取值范围。"
+    return str(exc)
+
+
 class GeoaskApp(tk.Tk):
-    def __init__(self, config_path: Path = g.ROOT / "config.yaml"):
+    def __init__(self, config_path: Path = g.DEFAULT_CONFIG):
         super().__init__()
         self.title("geoask · 发现附近")
         self.geometry("1420x940")
@@ -45,6 +92,7 @@ class GeoaskApp(tk.Tk):
         self.config_path = Path(config_path)
         self.result: QueryResult | None = None
         self.busy = False
+        self.generation = 0
         self.closed = False
         self.road_route = None
         self.parking_options = None
@@ -61,6 +109,7 @@ class GeoaskApp(tk.Tk):
         self.longitude, self.latitude = tk.StringVar(), tk.StringVar()
         self.radius, self.limit = tk.StringVar(), tk.StringVar()
         self.api_key = tk.StringVar()
+        self.api_key_is_saved = False
         self.preview_only = tk.BooleanVar(value=False)
         self.auto_route = tk.BooleanVar(value=True)
         self.parking_enabled = tk.BooleanVar(value=False)
@@ -74,6 +123,8 @@ class GeoaskApp(tk.Tk):
         self._style()
         self._layout()
         self._load_config(self.config_path)
+        if self.config_path.resolve() == g.DEFAULT_CONFIG.resolve():
+            self._restore_connection(restore_profile=True)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.bind("<Control-Return>", lambda _: self.submit())
         self.worker = Thread(target=self._work, name="geoask-query", daemon=True)
@@ -258,7 +309,8 @@ class GeoaskApp(tk.Tk):
                                        values=["自动（默认步行）", *UI_MODES], state="readonly", width=18)
         self.mode_combo.pack(side="left")
         self.mode_combo.bind("<<ComboboxSelected>>", lambda _: self.mode_changed())
-        ttk.Checkbutton(route_controls, text="选好地点后自动规划", variable=self.auto_route).pack(side="left", padx=12)
+        self.auto_route_toggle = ttk.Checkbutton(route_controls, text="选好地点后自动规划", variable=self.auto_route)
+        self.auto_route_toggle.pack(side="left", padx=12)
         self.route_button = self._button(route_controls, "规划路线", self.plan_route, primary=True)
         self.route_button.pack(side="right")
         self.route_button.configure(state="disabled")
@@ -360,6 +412,9 @@ class GeoaskApp(tk.Tk):
         widget.configure(state="disabled")
 
     def _load_config(self, path):
+        previous_llm = getattr(self, 'llm', None)
+        session_key = self.api_key.get().strip() if not self.api_key_is_saved else ''
+        self.generation += 1
         try:
             self.settings = g.read_settings(path)
         except g.GeoaskError as exc:
@@ -374,6 +429,10 @@ class GeoaskApp(tk.Tk):
         self.llm = self.settings.llm.model_copy(deep=True)
         self.routing_settings = self.settings.routing.model_copy(deep=True)
         self.map_settings = self.settings.map.model_copy(deep=True)
+        self._restore_connection()
+        if session_key and previous_llm and credentials.same_connection(previous_llm.model_dump(), self.llm.model_dump()):
+            self.api_key.set(session_key)
+            self.api_key_is_saved = False
         self.map_view.configure_map(self.map_settings, self.settings.cache_dir / "tiles")
         self.map_view.set_center(*self.settings.default_location, zoom=15)
         self._connection_status()
@@ -398,6 +457,25 @@ class GeoaskApp(tk.Tk):
         self.draw_map()
         self._set_busy(False)
 
+    def _restore_connection(self, restore_profile=False):
+        self.api_key.set("")
+        self.api_key_is_saved = False
+        try:
+            profile = credentials.load_connection()
+            if profile is None:
+                return
+            llm = g.LLMSettings.model_validate(profile['llm'])
+            maps = g.MapSettings.model_validate(profile['map'])
+            routing = g.RoutingSettings.model_validate(profile['routing'])
+            if restore_profile:
+                self.llm, self.map_settings, self.routing_settings = llm, maps, routing
+                self.map_view.configure_map(maps, self.settings.cache_dir / 'tiles')
+            self.api_key.set(credentials.saved_api_key(self.llm.model_dump()))
+            self.api_key_is_saved = True
+        except (credentials.LocalSettingsError, ValueError):
+            self.status.set("本地接口设置未载入，请打开接口设置清除或重新保存。")
+        self._connection_status()
+
     def _connection_status(self):
         ready = bool(self.api_key.get().strip() or os.getenv(self.llm.api_key_env))
         self.connection.set(f"{self.llm.model}\n" + ("密钥已就绪 · 仅用于意图解析" if ready else "尚未设置密钥，可先体验示例"))
@@ -410,7 +488,6 @@ class GeoaskApp(tk.Tk):
             except g.GeoaskError as exc:
                 messagebox.showerror("配置无法读取", str(exc), parent=self)
                 return
-            self.api_key.set("")
             self._load_config(Path(path))
             self.status.set(f"已切换配置：{Path(path).name}。重新查询后将使用新的数据。")
 
@@ -461,13 +538,13 @@ class GeoaskApp(tk.Tk):
             if Path(destination).exists():
                 messagebox.showerror("文件已存在", "请选择新的配置文件名。", parent=dialog)
                 return
-            # Carry API endpoint choices; secrets remain session-only.
+            # Region YAML carries endpoint choices; keys stay in the user profile/session.
             base = self.settings.model_copy(deep=True)
             base.llm, base.map, base.routing = self.llm, self.map_settings, self.routing_settings
             dialog.destroy()
             self._set_busy(True)
             self.status.set("正在验证地区数据和字段映射…")
-            self.jobs.put(("import", (Path(source), Path(destination), base, options)))
+            self._queue_job(("import", (Path(source), Path(destination), base, options)))
 
         self.import_apply_button = self._button(panel, "验证并导入", start, primary=True)
         self.import_apply_button.pack(fill="x")
@@ -479,7 +556,7 @@ class GeoaskApp(tk.Tk):
         dialog = tk.Toplevel(self)
         self.settings_window = dialog
         dialog.title("模型、地图与路线接口")
-        dialog.geometry("600x720")
+        dialog.geometry("630x840")
         dialog.resizable(False, False)
         dialog.configure(bg=WHITE)
         dialog.transient(self)
@@ -496,7 +573,7 @@ class GeoaskApp(tk.Tk):
         for label, name, initial in (("接口地址", "base_url", self.llm.base_url),
                                       ("模型名称", "model", self.llm.model),
                                       ("密钥环境变量", "api_key_env", self.llm.api_key_env),
-                                      ("API Key（可选，仅本次使用）", "api_key", self.api_key.get())):
+                                      ("API Key（可选）", "api_key", self.api_key.get())):
             self._label(panel, label, size=9, bold=True).pack(anchor="w", pady=(8, 5))
             var = tk.StringVar(value=initial)
             fields[name] = var
@@ -505,28 +582,58 @@ class GeoaskApp(tk.Tk):
         self._label(panel, "返回格式", size=9, bold=True).pack(anchor="w", pady=(12, 5))
         response_format = tk.StringVar(value=self.llm.response_format)
         ttk.Combobox(panel, textvariable=response_format, values=["json_object", "structured"], state="readonly").pack(fill="x")
-        self._label(panel, "DeepSeek 选择 json_object。留空密钥时读取环境变量。\n设置只在当前窗口生效，密钥不会写入磁盘。", size=9, color=MUTED,
-                    justify="left").pack(anchor="w", pady=(12, 10))
+        self.remember_connection = tk.BooleanVar(value=True)
+        ttk.Checkbutton(panel, text="保存接口和密钥到本机，下次自动读取", variable=self.remember_connection).pack(anchor="w", pady=(12, 4))
+        protection = "Windows 当前用户加密保存" if credentials._WINDOWS else "用户目录保存，密钥为明文，权限仅当前用户"
+        self._label(panel, "DeepSeek 选 json_object。优先级：本次输入 > 环境变量 > 本地保存。\n" + protection,
+                    size=8, color=MUTED, justify="left", wraplength=540).pack(anchor="w", pady=(4, 6))
 
         def apply():
             try:
-                values = {name: var.get().strip() for name, var in fields.items() if name != "api_key"}
-                if any(not value for value in values.values()):
-                    raise ValueError("请填写接口地址、模型名称和密钥环境变量。")
-                from urllib.parse import urlsplit
-                parsed = urlsplit(values["base_url"])
-                if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
-                    raise ValueError("接口地址需要是有效的 http:// 或 https:// URL，请勿在 URL 中填写密钥。")
-                self.llm = g.LLMSettings(**values, response_format=response_format.get(), timeout_seconds=self.llm.timeout_seconds)
-            except ValueError as exc:
-                messagebox.showerror("请检查接口设置", str(exc), parent=dialog)
+                llm, map_settings, routing_settings, key = validate_settings_form(
+                    {name: var.get().strip() for name, var in fields.items()}, response_format.get(),
+                    {name: var.get().strip() for name, var in map_fields.items()},
+                    self.llm.timeout_seconds, self.routing_settings.timeout_seconds)
+                if self.remember_connection.get():
+                    credentials.save_connection(llm.model_dump(), map_settings.model_dump(), routing_settings.model_dump(), key)
+                else:
+                    credentials.clear_connection()
+            except (ValueError, credentials.LocalSettingsError) as exc:
+                messagebox.showerror("请检查接口设置", settings_error_message(exc), parent=dialog)
                 return
-            self.api_key.set(fields["api_key"].get().strip())
+            map_changed = self.map_settings != map_settings
+            route_changed = self.routing_settings != routing_settings
+            self.llm, self.map_settings, self.routing_settings = llm, map_settings, routing_settings
+            self.api_key.set(key)
+            self.api_key_is_saved = False  # Applying the form is an explicit session choice.
             self._connection_status()
-            self.status.set("接口设置已更新，可以开始查询。")
+            if map_changed:
+                self.map_view.configure_map(self.map_settings, self.settings.cache_dir / "tiles")
+            if route_changed:
+                self.generation += 1
+                self.road_route = None
+                self.draw_map()
+                self.route_summary.set("路径接口已更新，请重新规划路线。")
+            self.status.set("接口已保存到本机，下次启动自动读取。" if self.remember_connection.get() else
+                            "接口仅在本次使用，已移除本地保存。")
             dialog.destroy()
 
-        self.apply_settings_button = self._button(panel, "应用设置", apply, primary=True)
+        def clear_saved():
+            try:
+                credentials.clear_connection()
+            except credentials.LocalSettingsError as exc:
+                messagebox.showerror("无法清除", str(exc), parent=dialog)
+                return
+            fields['api_key'].set('')
+            self.api_key.set('')
+            self.api_key_is_saved = False
+            self.remember_connection.set(False)
+            self._connection_status()
+            self.status.set("已清除本地保存的接口和密钥；环境变量不受影响。")
+
+        self.clear_saved_button = self._button(panel, "清除本地保存的接口和密钥", clear_saved)
+        self.clear_saved_button.pack(fill="x", pady=(0, 4))
+        self.apply_settings_button = self._button(panel, "应用所有设置", apply, primary=True)
         self.apply_settings_button.pack(fill="x", pady=(4, 0))
 
         self._label(map_panel, "地图与道路路线", size=18, bold=True).pack(anchor="w", pady=(0, 14))
@@ -546,22 +653,7 @@ class GeoaskApp(tk.Tk):
                     "或 Wi-Fi。不可用时仍可手动输入 WGS84 经纬度。",
                     size=9, color=MUTED, justify="left", wraplength=490).pack(anchor="w", pady=18)
 
-        def apply_map():
-            try:
-                map_settings = g.MapSettings(**{k: v.get().strip() for k, v in map_fields.items() if k != "endpoint"})
-                routing_settings = g.RoutingSettings(endpoint=map_fields["endpoint"].get().strip(),
-                                                           timeout_seconds=self.routing_settings.timeout_seconds)
-            except (ValueError, KeyError) as exc:
-                messagebox.showerror("接口设置无效", str(exc), parent=dialog)
-                return
-            self.map_settings, self.routing_settings = map_settings, routing_settings
-            self.map_view.configure_map(self.map_settings, self.settings.cache_dir / "tiles")
-            self.road_route = None
-            self.draw_map()
-            self.route_summary.set("地图与路径接口已更新，请重新规划路线。")
-            dialog.destroy()
-
-        self._button(map_panel, "应用地图与路径设置", apply_map, primary=True).pack(fill="x", pady=8)
+        self._button(map_panel, "应用所有设置", apply, primary=True).pack(fill="x", pady=8)
 
     def start_demo(self):
         if self.busy:
@@ -589,12 +681,17 @@ class GeoaskApp(tk.Tk):
                 self.open_settings()
                 return
             request = QueryRequest(query, center, radius, limit, self.config_path,
-                                   self.api_key.get().strip(), self.llm.model_copy(deep=True), demo,
+                                   "" if self.api_key_is_saved else self.api_key.get().strip(),
+                                   self.llm.model_copy(deep=True), demo,
                                    self.preview_only.get(), planning=True, demo_trip=demo_trip)
         except ValueError as exc:
             messagebox.showerror("请检查查询条件", str(exc), parent=self)
             return
+        self.generation += 1
         self.result = None
+        for widget in self.stop_controls.winfo_children():
+            widget.destroy()
+        self.stop_combos = []
         self.road_route = None
         self._clear_parking()
         self.active_stop = 0
@@ -609,10 +706,12 @@ class GeoaskApp(tk.Tk):
         self._set_busy(True)
         self.status.set("正在准备查询…")
         self.draw_map()
-        self.jobs.put(("query", request))
+        self._queue_job(("query", request))
 
     def _set_busy(self, value):
         self.busy = value
+        self.preview.configure(state="disabled" if value else "normal")
+        self.auto_route_toggle.configure(state="disabled" if value else "normal")
         for button in (self.search_button, self.demo_button, self.trip_demo_button, self.settings_button,
                        self.config_button, self.center_button, self.import_button):
             button.configure(state="disabled" if value else "normal")
@@ -624,8 +723,10 @@ class GeoaskApp(tk.Tk):
         self.parking_button.configure(state="normal" if not value and ready and self.parking_enabled.get() else "disabled")
         self.parking_combo.configure(state="readonly" if not value and self.parking_enabled.get() and self.parking_options and self.parking_options.candidates else "disabled")
         self.choose_button.configure(state="normal" if not value and self.result and not self.result.request.dry_run else "disabled")
-        for combo in self.stop_combos:
-            combo.configure(state="disabled" if value else "readonly")
+        for index, combo in enumerate(self.stop_combos):
+            enabled = (not value and self.result and index < len(self.result.stops)
+                       and self.result.stops[index].candidates and not self.result.request.dry_run)
+            combo.configure(state="readonly" if enabled else "disabled")
         self.mode_combo.configure(state="disabled" if value or self.parking_enabled.get() else "readonly")
         self.export_button.configure(state="normal" if not value and self.result and any(s.selected for s in self.result.stops) else "disabled")
         if value:
@@ -635,6 +736,10 @@ class GeoaskApp(tk.Tk):
             self.progress.stop()
             self.progress.place_forget()
 
+    def _queue_job(self, job):
+        self.generation += 1
+        self.jobs.put((self.generation, *job))
+
     def _work(self):
         engine = QueryEngine()
         try:
@@ -642,117 +747,143 @@ class GeoaskApp(tk.Tk):
                 job = self.jobs.get()
                 if job is None:
                     return
-                kind, request = job
+                generation, kind, request = job
+                def emit(kind, value):
+                    self.events.put((generation, kind, value))
                 try:
-                    progress = lambda status: self.events.put(("progress", status))
+                    progress = lambda status: emit("progress", status)
                     if kind == "query":
                         result = engine.run(request, progress)
-                        self.events.put(("result", result))
+                        emit("result", result)
                     elif kind == "reselect":
                         result = engine.reselect(*request, progress=progress)
-                        self.events.put(("reselected", result))
+                        emit("reselected", result)
                     elif kind == "route":
                         result, mode, routing, parking, parking_index = request
                         progress("正在请求真实道路路线…")
                         points = parking_route_points(parking, parking_index) if parking else route_points(result)
                         route = plan_road_route(points, "driving" if parking else mode, routing)
-                        self.events.put(("route", (result, route, parking, parking_index)))
+                        emit("route", (result, route, parking, parking_index))
                     elif kind == "parking":
                         result, radius = request
-                        self.events.put(("parking", engine.find_parking(result, radius, progress)))
+                        emit("parking", engine.find_parking(result, radius, progress))
                     elif kind == "import":
                         from geoask_data import import_region
                         source, destination, base, options = request
                         imported = import_region(source, destination, base, **options)
                         engine.close()
-                        self.events.put(("imported", imported))
+                        emit("imported", imported)
                 except Exception as exc:
-                    self.events.put(("route_error" if kind == "route" else "parking_error" if kind == "parking" else "import_error" if kind == "import" else "error", str(exc)))
+                    get_logger().exception("Worker operation failed (%s)", kind)
+                    errors = {"route": "route_error", "parking": "parking_error", "import": "import_error", "reselect": "reselect_error"}
+                    emit(errors.get(kind, "error"), str(exc))
         finally:
             engine.close()
+
 
     def _poll(self):
         if self.closed:
             return
         try:
-            while True:
-                kind, value = self.events.get_nowait()
-                if kind == "progress":
-                    self.status.set(value)
-                elif kind == "imported":
-                    path, count, named = value
-                    self._load_config(path)
-                    self.status.set(f"已导入 {count} 个地点（{named} 个有名称/别名），请输入该地区的目的地。")
-                elif kind == "import_error":
-                    self._set_busy(False)
-                    self.status.set("导入未完成，当前地区数据已保留。")
-                    messagebox.showerror("地区数据无法导入", value, parent=self)
-                elif kind in ("result", "reselected"):
-                    self.road_route = None
-                    self._clear_parking()
-                    self._show_result(value)
-                    self._set_busy(False)
-                    if self.auto_route.get() and not value.request.dry_run and all(s.selected for s in value.stops):
-                        self.plan_route()
-                elif kind == "route":
-                    result, route, parking, parking_index = value
-                    if result is self.result:
-                        self.route_parking = parking.candidates[parking_index] if parking else None
-                        self.road_route = route
-                        self._show_route(route)
-                    self._set_busy(False)
-                elif kind == "parking":
-                    if value.result is self.result:
-                        self.parking_options = value
-                        self.parking_index = None
-                        choices = [f"{i+1}. {row['name'] or '未命名停车场'} · 距目的地 {distance_label(row['dist_m'])}"
-                                   for i, row in enumerate(value.candidates)]
-                        self.parking_combo.configure(values=choices)
-                        self.parking_combo.set("请选择停车场后规划路线" if choices else "当前范围内没有汽车停车场")
-                        self.parking_message.set("距目的地的直线距离；请核对开放和准入信息" if choices else
-                                                 "没有匹配数据，可增大半径或切换地区数据")
-                        self.route_summary.set("已找到停车场候选，请选择后点击“规划路线”。" if choices else
-                                               "目的地附近未找到汽车停车场；可增大半径重查或关闭停车模式。")
-                        self.draw_map()
-                        self.map_view.fit([value.result.request.center, *[(r['longitude'],r['latitude']) for r in value.candidates],
-                                           (value.destination['longitude'], value.destination['latitude'])])
-                    self._set_busy(False)
-                elif kind == "parking_error":
-                    self._set_busy(False)
-                    self.parking_message.set(value)
-                    self.route_summary.set("停车场查询未完成：" + value)
-                elif kind == "route_error":
-                    self._set_busy(False)
-                    self.route_summary.set(value)
-                    self._set_text(self.navigation, value + "\n没有用直线或其他出行方式冒充道路路线。")
-                    self.status.set("路线暂未生成，地点选择已保留，可稍后重试。")
-                elif kind in ("location", "location_error"):
-                    self.locating = False
-                    self.locate_button.configure(state="disabled" if self.busy else "normal", text="获取设备位置")
-                    original, payload = value
-                    if kind == "location_error":
-                        self.position_source.set(payload)
-                        self.status.set("设备定位暂不可用，请手动输入坐标或在地图上右键选点。")
-                    elif (self.longitude.get(), self.latitude.get()) != original:
-                        self.status.set("设备定位已返回，但你已经手动修改坐标，未覆盖输入。")
-                    elif self.busy:
-                        self.status.set("设备位置已返回，当前查询使用原起点；请完成查询后重新获取位置。")
-                    else:
-                        self._apply_origin(payload.longitude, payload.latitude)
-                        accuracy = f"，精度约 {payload.accuracy_m:.0f} 米" if payload.accuracy_m is not None else "，精度未知"
-                        self.position_source.set("Windows 设备定位（GPS / Wi-Fi）" + accuracy)
-                        self.status.set("已更新查询起点；请重新查询以使用当前位置。")
-                elif kind == "error":
-                    self._set_busy(False)
-                    self.result_title.configure(text="这次查询没有完成")
-                    self.notice.configure(text=value)
-                    self._set_text(self.explanation, value)
-                    self._set_text(self.sql_view, "没有生成查询。")
-                    self.status.set("查询未完成，请检查接口、网络或数据配置后重试。")
-                    self.route_summary.set("本次地点查询未完成，请检查条件后重试。")
-        except Empty:
-            pass
-        self.after(80, self._poll)
+            drain_events(self.events, self._handle_event, self._event_error)
+        finally:
+            if not self.closed:
+                self.after(80, self._poll)
+
+    def _event_error(self):
+        self._set_busy(False)
+        self.status.set("界面处理出错，已恢复操作。详情见用户缓存目录 logs/geoask.log，可重新查询。")
+
+    def report_callback_exception(self, exc_type, exc_value, traceback):
+        get_logger().error("Tk callback failed", exc_info=(exc_type, exc_value, traceback))
+        self._event_error()
+
+    def _handle_event(self, event):
+        if len(event) == 3:
+            generation, kind, value = event
+            if generation != self.generation:
+                return
+        else:
+            kind, value = event
+        if kind == "progress":
+            self.status.set(value)
+        elif kind == "imported":
+            path, count, named = value
+            self._load_config(path)
+            self.status.set(f"已导入 {count} 个地点（{named} 个有名称/别名），请输入该地区的目的地。")
+        elif kind == "import_error":
+            self._set_busy(False)
+            self.status.set("导入未完成，当前地区数据已保留。")
+            messagebox.showerror("地区数据无法导入", value, parent=self)
+        elif kind in ("result", "reselected"):
+            self.road_route = None
+            self._clear_parking()
+            self._show_result(value)
+            self._set_busy(False)
+            if self.auto_route.get() and not value.request.dry_run and all(s.selected for s in value.stops):
+                self.plan_route()
+        elif kind == "route":
+            result, route, parking, parking_index = value
+            if result is self.result:
+                self.route_parking = parking.candidates[parking_index] if parking else None
+                self.road_route = route
+                self._show_route(route)
+            self._set_busy(False)
+        elif kind == "parking":
+            if value.result is self.result:
+                self.parking_options = value
+                self.parking_index = None
+                choices = [f"{i+1}. " + (row['name'] or f"未命名停车场 ({row['longitude']:.5f}, {row['latitude']:.5f})")
+                           + f" · 距目的地 {distance_label(row['dist_m'])}"
+                           for i, row in enumerate(value.candidates)]
+                self.parking_combo.configure(values=choices)
+                self.parking_combo.set("请选择停车场后规划路线" if choices else "当前范围内没有汽车停车场")
+                self.parking_message.set(value.summary + " 距离为直线距离；请核对开放和准入信息" if choices else
+                                         "没有匹配数据，可增大半径或切换地区数据")
+                self.route_summary.set("已找到停车场候选，请选择后点击“规划路线”。" if choices else
+                                       "目的地附近未找到汽车停车场；可增大半径重查或关闭停车模式。")
+                self.draw_map()
+                self.map_view.fit([value.result.request.center, *[(r['longitude'],r['latitude']) for r in value.candidates],
+                                   (value.destination['longitude'], value.destination['latitude'])])
+            self._set_busy(False)
+        elif kind == "parking_error":
+            self._set_busy(False)
+            self.parking_message.set(value)
+            self.route_summary.set("停车场查询未完成：" + value)
+        elif kind == "route_error":
+            self._set_busy(False)
+            self.route_summary.set(value)
+            self._set_text(self.navigation, value + "\n没有用直线或其他出行方式冒充道路路线。")
+            self.status.set("路线暂未生成，地点选择已保留，可稍后重试。")
+        elif kind in ("location", "location_error"):
+            self.locating = False
+            self.locate_button.configure(state="disabled" if self.busy else "normal", text="获取设备位置")
+            original, payload = value
+            if kind == "location_error":
+                self.position_source.set(payload)
+                self.status.set("设备定位暂不可用，请手动输入坐标或在地图上右键选点。")
+            elif (self.longitude.get(), self.latitude.get()) != original:
+                self.status.set("设备定位已返回，但你已经手动修改坐标，未覆盖输入。")
+            elif self.busy:
+                self.status.set("设备位置已返回，当前查询使用原起点；请完成查询后重新获取位置。")
+            else:
+                self._apply_origin(payload.longitude, payload.latitude)
+                accuracy = f"，精度约 {payload.accuracy_m:.0f} 米" if payload.accuracy_m is not None else "，精度未知"
+                self.position_source.set("Windows 设备定位（GPS / Wi-Fi）" + accuracy)
+                self.status.set("已更新查询起点；请重新查询以使用当前位置。")
+        elif kind == "reselect_error":
+            self._set_busy(False)
+            self.notice.configure(text="更换地点未完成：" + value)
+            self.status.set("更换地点失败，已保留原行程，可重试或重新查询。")
+            self.route_summary.set("已保留原行程地点；请重试换点，或重新规划原行程路线。")
+        elif kind == "error":
+            self._set_busy(False)
+            self.result_title.configure(text="这次查询没有完成")
+            self.notice.configure(text=value)
+            self._set_text(self.explanation, value)
+            self._set_text(self.sql_view, "没有生成查询。")
+            self.status.set("查询未完成，请检查接口、网络或数据配置后重试。")
+            self.route_summary.set("本次地点查询未完成，请检查条件后重试。")
 
     def _show_result(self, result):
         self.result = result
@@ -801,9 +932,9 @@ class GeoaskApp(tk.Tk):
             self.notebook.select(1)
         else:
             self.main_tabs.select(0)
-        self.status.set("地点选择已完成，支持在行程中更换候选地点。")
+        self.status.set(result_status(result))
         self.draw_map()
-        points = [result.request.center, *[(s.selected["longitude"], s.selected["latitude"]) for s in result.stops if s.selected]]
+        points = result_map_points(result, self.active_stop)
         self.map_view.fit(points)
 
     def _render_candidates(self):
@@ -829,6 +960,7 @@ class GeoaskApp(tk.Tk):
             self._render_candidates()
             self.main_tabs.select(1)
             self.draw_map()
+            self.map_view.fit(result_map_points(self.result, self.active_stop))
 
     def choose_candidate(self):
         selected = self.table.selection()
@@ -845,7 +977,7 @@ class GeoaskApp(tk.Tk):
         self._set_text(self.navigation, "地点已改变，等待重新规划。")
         self.draw_map()
         self._set_busy(True)
-        self.jobs.put(("reselect", (self.result, index, candidate)))
+        self._queue_job(("reselect", (self.result, index, candidate)))
 
     def _clear_parking(self):
         self.parking_options = None
@@ -900,7 +1032,7 @@ class GeoaskApp(tk.Tk):
         self._set_text(self.navigation, "正在查找最后一站附近停车场，旧路线已清除。")
         self.route_summary.set("正在查找最后一站附近停车场…")
         self._set_busy(True)
-        self.jobs.put(("parking", (self.result, radius)))
+        self._queue_job(("parking", (self.result, radius)))
 
     def select_parking(self, event=None):
         if self.busy or not self.parking_options:
@@ -946,7 +1078,7 @@ class GeoaskApp(tk.Tk):
         self.draw_map()
         self._set_busy(True)
         self.route_summary.set("正在规划驾车到停车场的道路路线…" if parking else f"正在规划{MODE_NAMES[mode]}路线，按你指定的站点顺序行进…")
-        self.jobs.put(("route", (self.result, mode, self.routing_settings.model_copy(deep=True), parking, self.parking_index)))
+        self._queue_job(("route", (self.result, mode, self.routing_settings.model_copy(deep=True), parking, self.parking_index)))
 
     def mode_changed(self):
         if not self.busy:
@@ -965,7 +1097,7 @@ class GeoaskApp(tk.Tk):
         if self.route_parking:
             parking = self.route_parking
             self.route_summary.set(self.route_summary.get() + f"\n终点：{parking['name'] or '未命名停车场'} · 距原目的地直线 {distance_label(parking['dist_m'])}")
-        sections = [self.route_summary.get(), f"服务：{route.provider}\n按用户顺序规划，默认逐站选最近候选，不保证全程最短。\n"
+        sections = [self.route_summary.get(), f"服务：{route.provider}\n中文指引：{route.instruction_source}\n按用户顺序规划，默认逐站选最近候选，不保证全程最短。\n"
                     "地点代表点会吸附到可通行道路，可能不是实际入口。"]
         if self.route_parking:
             sections.append("停车模式：保留前面各站，最后一段驾车到已选停车场。原目的地：" +
@@ -1063,6 +1195,7 @@ class GeoaskApp(tk.Tk):
                 position = get_device_location()
                 self.events.put(("location", (original, position)))
             except Exception as exc:
+                get_logger().exception("Device location failed")
                 self.events.put(("location_error", (original, str(exc))))
         Thread(target=worker, daemon=True, name="geoask-location").start()
 
@@ -1080,6 +1213,8 @@ class GeoaskApp(tk.Tk):
             self.status.set(f"已导出已选择的行程地点到 {Path(path).name}。")
 
     def close(self):
+        if self.closed:
+            return
         self.closed = True
         self.api_key.set("")
         self.map_view.close()

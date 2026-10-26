@@ -1,13 +1,41 @@
 {
-  "ui_ticks": 309,
+  "ui_ticks": 362,
+  "verified_at": "2026-10-26T07:41:15.945449+00:00",
+  "code_sha256": {
+    "geoask.py": "80ac7b073c61774988b69ef29b61b1130a6fe41ffaa3aece8afef7000499b433",
+    "geoask_credentials.py": "da7248ab38f9c6d5c4e90b6a1b30f279bfb1d31100e4a5c29ade1f7ff3c8d907",
+    "geoask_data.py": "aa879b1667355015e949b076fba671d8bb42826b103a60779451576c1d14fb50",
+    "geoask_gui.py": "b82a7f0ac8a1122862d602399a0ab8ffc8d2b5c42c5b071dd8542ded6104afc6",
+    "geoask_location.py": "6daf604c4aa5bf294d2537206ed8a23a0f6556f76157c8dcd543b63acecfb4f3",
+    "geoask_map.py": "0874d982145b3145ae94fa9549b4e6d64b3584a2fbef43720910e1869c8645fb",
+    "geoask_parking.py": "2b1555f930c1fdd0dcaa746dd327f29e68a780f7c120e316aaedea8db5c6f394",
+    "geoask_places.py": "f2c4b9885a99d3e535a25be25668c7c218ebab2d036294c5c9161b74617a7d49",
+    "geoask_routing.py": "29713a5c3f12ce69f4fe2cbfb9ca456ef76d9f2f0ca39e69ad38b3df6971e150",
+    "geoask_runtime.py": "bb87ef8e45540a82170d65c7024af9bedd2e2036cc47b9a3b443f169d6ebe287",
+    "geoask_service.py": "12d7b31b86b1f8da88fb5763bfe9362c9b910db5b453464b04c47838d8b8e6b0"
+  },
+  "ambiguous_candidates_visible": {
+    "shown": 10,
+    "zoom": 14,
+    "total_name_matches": 177,
+    "explicit_selection_required": true
+  },
+  "handler_exception_recovery_ok": true,
   "stops": [
     "星巴克",
     "嘉里健身"
   ],
   "route_m": 1539.0,
   "route_s": 1201.475,
-  "real_map_tiles": 20,
+  "real_map_tiles": 35,
   "route_geometry_points": 25,
+  "route_language": {
+    "provider": "en-US",
+    "display": "zh-CN",
+    "source": "本地中文模板（基于道路转向数据）",
+    "first_instruction": "从右侧出发，向西行进（呼家楼西里南街），行进约 331 米"
+  },
+  "zoom_in_and_out_ok": true,
   "reselect_and_reroute_ok": true,
   "preview_ok": true,
   "compact_layout_ok": true,
@@ -58,5 +86,7 @@
   "error_recovery_ok": true,
   "settings_dialog_ok": true,
   "map_settings_tab_ok": true,
+  "apply_preserves_other_tab_key_ok": true,
+  "local_connection_save_restore_clear_ok": true,
   "passed": true
 }
