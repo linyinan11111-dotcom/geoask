@@ -239,7 +239,8 @@ class QueryEngine:
             elif intent.place_name:
                 sql, params = places.build_place_query(intent.place_name, center, request.limit, settings, intent.place_candidates)
                 if not request.dry_run:
-                    candidates = places.search_place(self.con, intent.place_name, center, request.limit, settings, intent.place_candidates)
+                    candidates = places.search_place_with_variants(
+                        self.con, intent.place_name, center, request.limit, settings, intent.place_candidates)
                     if not candidates:
                         reason = "当前数据和地名目录中没有这个具体地点，请补充城市/完整名称或切换数据；不会替换成其他场馆。"
                     elif candidates[0]['name_match_count'] > 1:

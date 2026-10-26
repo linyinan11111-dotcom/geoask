@@ -637,7 +637,7 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         validate_resolved_intent(intent, query)
         con = load_data(settings)
         if intent.place_name:
-            from geoask_places import build_place_query, search_place
+            from geoask_places import build_place_query, search_place_with_variants
             sql, params = build_place_query(intent.place_name, center, limit, settings, intent.place_candidates)
             if explain or dry_run:
                 click.echo(f"具体目的地: {intent.place_name}；活动/类别: {intent.intent}")
@@ -648,7 +648,8 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
                 click.echo("SQL（占位符与参数分开；未执行地点查询）:\n" + sql)
                 click.echo("绑定参数: " + json.dumps(params, ensure_ascii=False))
                 return
-            results = search_place(con, intent.place_name, center, limit, settings, intent.place_candidates)
+            results = search_place_with_variants(con, intent.place_name, center, limit, settings,
+                                                 intent.place_candidates)
             click.echo(f"结果 ({len(results)} 条):")
             for i, row in enumerate(results, 1):
                 click.echo(f"  {i}. {row['name']}  [{row['category']}]  {row['dist_m']:.0f}m")
