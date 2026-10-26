@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "frozen": true,
+  "poi_rows": 415,
+  "named_destination": true,
+  "spatial": true,
+  "local_credentials": true,
+  "real_embedding": true,
+  "gui": true,
+  "passed": true,
+  "verified_at": "2026-10-26T11:44:22.850568+00:00",
+  "archive": "geoask-0.2.0-windows-x64.zip",
+  "archive_sha256": "4dcaf682bd2c92620385fdd3b3c54aa5805eef94a744a5cb7255c82d8636fd97",
+  "returncode": 0,
+  "isolated_user_storage": true,
+  "outside_checkout": true,
+  "embedding_source": "existing local cache",
+  "code_sha256": {
+    "geoask.py": "2612bdac23227cf661a545c5f1f2509e14cfd2b03972f872119e1f4f7d8d82e6",
+    "scripts/desktop_entry.py": "01f64b78dd849c5bcf7fb256128f177e28e294cc9e8706d42a7cb08ccafedade",
+    "scripts/build_desktop.py": "f411290c0aa52a01a3403b2f18c4955b7b6c01f4a227c4399c81ffebe951251a"
+  }
+}

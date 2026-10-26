@@ -1,0 +1,30 @@
+{
+  "verified_at": "2026-10-26T11:45:14.380164+00:00",
+  "version": "0.2.0",
+  "runtime_source_commit": "4530312",
+  "pytest": {
+    "passed": 212,
+    "platform": "Windows x64 / Python 3.13",
+    "real_model": true
+  },
+  "github_ci": {
+    "url": "https://github.com/linyinan11111-dotcom/geoask/actions/runs/40316782679",
+    "result": "success",
+    "matrix": [
+      "Windows 3.11",
+      "Windows 3.12",
+      "Windows 3.13",
+      "Ubuntu 3.11",
+      "Ubuntu 3.12",
+      "Ubuntu 3.13"
+    ]
+  },
+  "desktop_report": "docs/desktop-verification.json",
+  "wheel_smoke": "passed: normal install, resources, credentials, CLI, local compatible HTTP API and GUI initialization",
+  "limitations": [
+    "Desktop tested on this Windows x64 host; not every Windows device",
+    "Embedding loaded from existing model cache; first download not repeated",
+    "No paid DeepSeek API or successful hardware GPS validation",
+    "Prior GUI/reliability JSON files are historical snapshots; consult their code hashes"
+  ]
+}

@@ -45,7 +45,7 @@ def main():
                       archive=archive.name, archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
                       returncode=process.returncode, isolated_user_storage=True, outside_checkout=True,
                       embedding_source='existing local cache' if args.model_cache else 'not exercised',
-                      code_sha256={p.as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in
+                      code_sha256={p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in
                                    [ROOT / 'geoask.py', ROOT / 'scripts/desktop_entry.py', ROOT / 'scripts/build_desktop.py']})
         (ROOT / 'docs/desktop-verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps(report, ensure_ascii=False, indent=2))
