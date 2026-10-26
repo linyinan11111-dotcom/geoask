@@ -30,6 +30,14 @@ map:
   attribution: © OpenStreetMap contributors
   user_agent: geoask/0.2 (local desktop nearby search)
 
+# 可选高德 POI 在线兜底。本地数据没有结果时才查询；Key 只从环境变量读取。
+amap:
+  enabled: true
+  endpoint: https://restapi.amap.com/v5/place/text
+  api_key_env: AMAP_WEB_KEY
+  timeout_seconds: 12
+  # region: 北京
+
 # Valhalla 接口：支持真实步行、骑行和驾车路线；可换成自部署实例。
 routing:
   endpoint: https://valhalla1.openstreetmap.de/route

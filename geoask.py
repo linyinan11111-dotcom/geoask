@@ -72,6 +72,32 @@ class MapSettings(BaseModel):
         return value
 
 
+class AmapSettings(BaseModel):
+    """Optional Gaode (Amap) POI fallback; the Web service key stays external."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    endpoint: str = "https://restapi.amap.com/v5/place/text"
+    api_key_env: str = "AMAP_WEB_KEY"
+    timeout_seconds: float = Field(default=12, gt=0, le=60)
+    region: str | None = None
+
+    @field_validator("endpoint")
+    @classmethod
+    def valid_endpoint(cls, value):
+        from urllib.parse import urlsplit
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("高德 POI 接口必须是有效的 HTTP(S) 地址。")
+        return value
+
+    @field_validator("api_key_env")
+    @classmethod
+    def valid_api_key_env(cls, value):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", value or ""):
+            raise ValueError("高德 Key 环境变量名无效。")
+        return value
+
+
 class RoutingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     endpoint: str = "https://valhalla1.openstreetmap.de/route"
@@ -126,6 +152,7 @@ class Settings(BaseModel):
     cache_dir: Path = Path(".cache")
     llm: LLMSettings = Field(default_factory=LLMSettings)
     map: MapSettings = Field(default_factory=MapSettings)
+    amap: AmapSettings = Field(default_factory=AmapSettings)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     parking: ParkingSettings = Field(default_factory=ParkingSettings)
     place_catalog_path: Path | None = None
@@ -650,6 +677,10 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
                 return
             results = search_place_with_variants(con, intent.place_name, center, limit, settings,
                                                  intent.place_candidates)
+            if not results and settings.amap.enabled:
+                from geoask_amap import search_places
+                results = search_places(intent.place_name, center, radius, limit, settings.amap,
+                                        os.getenv(settings.amap.api_key_env, "").strip())
             click.echo(f"结果 ({len(results)} 条):")
             for i, row in enumerate(results, 1):
                 click.echo(f"  {i}. {row['name']}  [{row['category']}]  {row['dist_m']:.0f}m")
@@ -682,6 +713,10 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
                 click.echo("绑定参数: " + json.dumps(fallback_params, ensure_ascii=False))
                 return
             fallback_results = search_place_with_variants(con, intent.intent, center, limit, settings)
+            if not fallback_results and settings.amap.enabled:
+                from geoask_amap import search_places
+                fallback_results = search_places(intent.intent, center, radius, limit, settings.amap,
+                                                 os.getenv(settings.amap.api_key_env, "").strip())
             if fallback_results:
                 click.echo(f"类别匹配不足，已按名称/关键词“{intent.intent}”搜索。")
                 click.echo(f"结果 ({len(fallback_results)} 条):")
@@ -700,6 +735,10 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
             click.echo("绑定参数: " + json.dumps(params, ensure_ascii=False))
             return
         results = search(con, match.query_category, center, radius, limit)
+        if not results and settings.amap.enabled:
+            from geoask_amap import search_places
+            results = search_places(intent.intent, center, radius, limit, settings.amap,
+                                    os.getenv(settings.amap.api_key_env, "").strip())
         click.echo(f"结果 ({len(results)} 条):")
         for i, row in enumerate(results, 1):
             click.echo(f"  {i}. {row['name'] or '(未命名地点)'}  [{row['category']}]  {row['dist_m']:.0f}m")

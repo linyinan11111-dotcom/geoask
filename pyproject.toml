@@ -29,7 +29,7 @@ geoask = "geoask:cli"
 geoask-gui = "geoask_gui:main"
 
 [tool.setuptools]
-py-modules = ["geoask", "geoask_service", "geoask_gui", "geoask_map", "geoask_location", "geoask_routing", "geoask_places", "geoask_data", "geoask_parking", "geoask_runtime", "geoask_credentials"]
+py-modules = ["geoask", "geoask_service", "geoask_gui", "geoask_map", "geoask_location", "geoask_routing", "geoask_places", "geoask_data", "geoask_parking", "geoask_runtime", "geoask_credentials", "geoask_amap"]
 packages = ["geoask_resources"]
 
 [tool.setuptools.dynamic]

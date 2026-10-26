@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field, replace
+import os
 from pathlib import Path
 from typing import Callable
 import hashlib
@@ -10,6 +11,14 @@ from geoask_runtime import atomic_output
 
 import geoask as g
 import geoask_places as places
+
+
+def _amap_search(query, center, radius, limit, settings):
+    if not settings.amap.enabled:
+        return []
+    from geoask_amap import search_places
+    return search_places(query, center, radius, limit, settings.amap,
+                         os.getenv(settings.amap.api_key_env, "").strip())
 
 
 @dataclass(frozen=True)
@@ -177,6 +186,8 @@ class QueryEngine:
                 progress("正在查找附近地点…")
                 rows = g.search(self.con, match.query_category, request.center, request.radius, request.limit,
                                 include_coordinates=True)
+                if not rows:
+                    rows = _amap_search(intent.intent, request.center, request.radius, request.limit, settings)
         else:
             stop = self._name_fallback_stop(intent, match, request, progress, settings)
             return QueryResult(request, intent, stop.match, list(self.categories), stop.candidates,
@@ -194,6 +205,10 @@ class QueryEngine:
             progress(f"类别匹配不足，正在按名称搜索“{intent.intent}”…")
             candidates = places.search_place_with_variants(
                 self.con, intent.intent, center, request.limit, settings)
+            if not candidates:
+                candidates = _amap_search(intent.intent, center, request.radius, request.limit, settings)
+            if candidates and candidates[0].get("source"):
+                reason = f"本地数据未找到，已从{candidates[0]['source']}找到名称候选；请确认具体地点。"
             if not candidates:
                 reason = (f"类别匹配不足且名称中没有找到“{intent.intent}”，请补充完整名称、增大范围或切换地区数据。")
         return PlannedStop(intent, category_match, candidates, center, sql, params,
@@ -241,6 +256,10 @@ class QueryEngine:
                 if not request.dry_run:
                     candidates = places.search_place_with_variants(
                         self.con, intent.place_name, center, request.limit, settings, intent.place_candidates)
+                    if not candidates:
+                        candidates = _amap_search(intent.place_name, center, request.radius, request.limit, settings)
+                    if candidates and candidates[0].get("source"):
+                        reason = f"本地数据未找到，已从{candidates[0]['source']}找到名称候选；请确认具体地点。"
                     if not candidates:
                         reason = "当前数据和地名目录中没有这个具体地点，请补充城市/完整名称或切换数据；不会替换成其他场馆。"
                     elif candidates[0]['name_match_count'] > 1:
