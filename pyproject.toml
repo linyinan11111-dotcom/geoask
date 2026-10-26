@@ -18,6 +18,10 @@ classifiers = [
 requires-python = ">=3.11,<3.14"
 dynamic = ["dependencies", "version"]
 
+[project.urls]
+Repository = "https://github.com/linyinan11111-dotcom/geoask"
+Releases = "https://github.com/linyinan11111-dotcom/geoask/releases"
+
 [project.scripts]
 geoask = "geoask:cli"
 

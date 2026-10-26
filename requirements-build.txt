@@ -1,0 +1,3 @@
+pyinstaller==6.22.3
+setuptools>=77
+wheel

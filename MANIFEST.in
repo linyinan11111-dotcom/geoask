@@ -2,6 +2,7 @@ include config.yaml requirements.txt
 recursive-include data *.gpkg *.json *.txt
 include scripts/get_location.ps1
 include requirements-dev.txt 启动界面.cmd
+include requirements-build.txt
 recursive-include scripts *.py
 recursive-include tests *.py
 recursive-include docs *.md

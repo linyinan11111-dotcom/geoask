@@ -4,6 +4,12 @@
 
 完整代码说明：[项目代码结构与技术架构详解](docs/项目代码结构与技术架构详解.md)。包含目录与函数索引、执行流程、技术选择、设计理由、本地密钥保存、地图导航、测试和扩展说明。
 
+## 下载已打包版本
+
+打开 [GitHub Releases 最新版本](https://github.com/linyinan11111-dotcom/geoask/releases/latest)。Windows 10/11 x64 用户下载 `geoask-0.2.0-windows-x64.zip`，完整解压后打开 `geoask.exe`，无需安装 Python。首次类别查询需联网下载模型；正常 LLM、地图与路线功能需要网络。
+
+Python 用户可下载 wheel 或源码包。详细步骤和附件选择见 [下载与使用说明](docs/release-download.md)。
+
 ## 桌面界面
 
 Windows 双击 **`启动界面.cmd`**，或运行 `python geoask_gui.py`。已有虚拟环境时可直接执行 `.venv\Scripts\pythonw.exe geoask_gui.py`；安装项目后也可使用 `geoask-gui` 命令。

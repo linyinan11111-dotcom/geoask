@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import sys
 from zipfile import BadZipFile
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,6 +186,10 @@ def read_settings(path: Path) -> Settings:
 def connect_spatial() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     try:
+        if getattr(sys, "frozen", False):
+            # The desktop distribution includes the matching signed extension.
+            extension = resource_file("spatial.duckdb_extension")
+            con.execute("LOAD '" + str(extension).replace("'", "''") + "'")
         try:
             con.execute("LOAD spatial")
         except duckdb.Error:
