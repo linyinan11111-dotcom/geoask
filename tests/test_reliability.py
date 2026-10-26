@@ -229,15 +229,34 @@ def test_nan_radius_rejected_before_api_even_named_query(monkeypatch):
 
 @pytest.mark.parametrize("category", [None, "cafe"])
 def test_cli_semantic_failure_and_empty_results_exit_nonzero(monkeypatch, category):
+    import geoask_places
     monkeypatch.setattr(g, "parse_intent", lambda *a, **kw: g.GeoIntent(intent="咖啡", modifiers=[]))
     con = MagicMock()
     con.execute.return_value.fetchall.return_value = [("cafe",)]
     monkeypatch.setattr(g, "load_data", lambda *a: con)
     monkeypatch.setattr(g, "SemanticMapper", lambda *a: NS(match=lambda _: g.CategoryMatch(category, "cafe", .9, .5)))
     monkeypatch.setattr(g, "search", lambda *a, **kw: [])
+    monkeypatch.setattr(geoask_places, "search_place", lambda *a, **kw: [])
     result = CliRunner().invoke(g.cli, ["咖啡"])
     assert result.exit_code != 0
     assert "类别匹配失败" in result.output if category is None else "没有匹配地点" in result.output
+    con.close.assert_called_once()
+
+
+def test_cli_low_category_match_falls_back_to_name_search(monkeypatch):
+    import geoask_places
+    con = MagicMock()
+    con.execute.return_value.fetchall.return_value = []
+    monkeypatch.setattr(g, "load_data", lambda *a: con)
+    monkeypatch.setattr(g, "parse_intent", lambda *a, **kw: g.GeoIntent(intent="洗浴中心", modifiers=[]))
+    monkeypatch.setattr(g, "SemanticMapper", lambda *a: pytest.fail("No category table should load embeddings"))
+    monkeypatch.setattr(geoask_places, "search_place", lambda *a, **kw: [{
+        "name": "阳光洗浴中心", "category": "unknown", "name_rank": 2,
+        "name_match_count": 1, "longitude": 116.46, "latitude": 39.92, "dist_m": 120,
+    }])
+    result = CliRunner().invoke(g.cli, ["我想去洗浴中心"])
+    assert result.exit_code == 0, result.output
+    assert "名称/关键词" in result.output and "阳光洗浴中心" in result.output
     con.close.assert_called_once()
 
 

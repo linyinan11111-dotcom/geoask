@@ -55,9 +55,37 @@ def test_rejected_mapping_never_searches(engine, monkeypatch):
     engine, mapper_factory = engine
     mapper_factory.return_value.match = lambda intent: g.CategoryMatch(None, "cafe", .2, .01)
     monkeypatch.setattr(g, "search", lambda *a, **kw: pytest.fail("Rejected match ran search"))
+    monkeypatch.setattr(service.places, "search_place", lambda *a, **kw: [])
     result = engine.run(request(demo=True))
-    assert not result.rows and not result.sql
-    assert "可用类别" in result.note
+    assert not result.rows and result.stops[0].resolution == "name-fallback"
+    assert "名称中没有找到" in result.note
+
+
+def test_low_category_match_falls_back_to_name_search(engine, monkeypatch):
+    engine, mapper_factory = engine
+    mapper_factory.return_value.match = lambda intent: g.CategoryMatch(None, "fitness_centre", .28, .04)
+    monkeypatch.setattr(g, "parse_intent", lambda *a, **kw: g.GeoIntent(intent="洗浴中心", modifiers=[]))
+    monkeypatch.setattr(service.places, "search_place", lambda *a, **kw: [{
+        "name": "阳光洗浴中心", "category": "unknown", "name_rank": 2,
+        "name_match_count": 1, "longitude": 116.461, "latitude": 39.921,
+        "dist_m": 180.0,
+    }])
+    result = engine.run(replace(request(), query="我想去洗浴中心"))
+    stop = result.stops[0]
+    assert stop.resolution == "name-fallback"
+    assert stop.candidates[0]["name"] == "阳光洗浴中心"
+    assert stop.selected is None
+    assert "名称" in result.note and "洗浴中心" in result.note
+
+
+def test_low_category_match_name_fallback_dry_run_does_not_search(engine, monkeypatch):
+    engine, mapper_factory = engine
+    mapper_factory.return_value.match = lambda intent: g.CategoryMatch(None, "fitness_centre", .28, .04)
+    monkeypatch.setattr(g, "parse_intent", lambda *a, **kw: g.GeoIntent(intent="洗浴中心", modifiers=[]))
+    monkeypatch.setattr(service.places, "search_place", lambda *a, **kw: pytest.fail("name fallback searched in preview"))
+    result = engine.run(replace(request(), query="我想去洗浴中心", dry_run=True))
+    assert result.stops[0].resolution == "name-fallback"
+    assert not result.stops[0].candidates and "ST_Distance_Spheroid" in result.sql
 
 
 def test_invalid_inputs_never_reach_api(monkeypatch):

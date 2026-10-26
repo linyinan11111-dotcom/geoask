@@ -4,7 +4,7 @@
 
 ## Windows 用户（推荐）
 
-下载 `geoask-0.2.0-windows-x64.zip`，解压整个压缩包，再双击 `geoask.exe`。
+下载 `geoask-0.2.1-windows-x64.zip`，解压整个压缩包，再双击 `geoask.exe`。
 
 - 支持 Windows 10/11 的 x64 电脑，不需要安装 Python。
 - 保留 `geoask.exe` 旁的 `_internal` 目录，不要只复制 exe。
@@ -19,16 +19,16 @@
 
 ## Python 用户 / Linux / macOS
 
-下载 `geoask-0.2.0-py3-none-any.whl`，在 Python 3.11–3.13 虚拟环境中安装：
+下载 `geoask-0.2.1-py3-none-any.whl`，在 Python 3.11–3.13 虚拟环境中安装：
 
 ```bash
-python -m pip install geoask-0.2.0-py3-none-any.whl
+python -m pip install geoask-0.2.1-py3-none-any.whl
 geoask-gui
 ```
 
 Linux 可能需要通过系统包管理器安装 `python3-tk`。wheel 不包含依赖，pip 安装时需要网络；macOS/Linux 没有本次发布的原生桌面压缩包。
 
-需要修改源码时，下载 GitHub 自动提供的 Source code，或 `geoask-0.2.0.tar.gz`，解压后在项目目录运行：
+需要修改源码时，下载 GitHub 自动提供的 Source code，或 `geoask-0.2.1.tar.gz`，解压后在项目目录运行：
 
 ```bash
 python -m pip install -r requirements.txt -e .
@@ -40,7 +40,7 @@ python geoask_gui.py
 `SHA256SUMS.txt` 包含附件的 SHA256。Windows PowerShell 示例：
 
 ```powershell
-Get-FileHash .\geoask-0.2.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\geoask-0.2.1-windows-x64.zip -Algorithm SHA256
 ```
 
 ## 数据和许可证

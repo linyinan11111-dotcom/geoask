@@ -3,7 +3,7 @@ from contextlib import ExitStack
 from importlib.resources import as_file, files
 import atexit
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 _resources = ExitStack()
 atexit.register(_resources.close)

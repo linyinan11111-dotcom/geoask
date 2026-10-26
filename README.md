@@ -8,7 +8,7 @@
 
 ## 下载已打包版本
 
-打开 [GitHub Releases 最新版本](https://github.com/linyinan11111-dotcom/geoask/releases/latest)。Windows 10/11 x64 用户下载 `geoask-0.2.0-windows-x64.zip`，完整解压后打开 `geoask.exe`，无需安装 Python。首次类别查询需联网下载模型；正常 LLM、地图与路线功能需要网络。
+打开 [GitHub Releases 最新版本](https://github.com/linyinan11111-dotcom/geoask/releases/latest)。Windows 10/11 x64 用户下载 `geoask-0.2.1-windows-x64.zip`，完整解压后打开 `geoask.exe`，无需安装 Python。首次类别查询需联网下载模型；正常 LLM、地图与路线功能需要网络。
 
 Python 用户可下载 wheel 或源码包。详细步骤和附件选择见 [下载与使用说明](docs/release-download.md)。
 
@@ -70,7 +70,7 @@ place_aliases:
 4. 默认自动调用 Valhalla 按道路规划。支持步行、骑行、驾车；自然语言指定方式时自动采用，也可手动覆盖。路线保持用户顺序，不重排成另一种访问顺序，也不承诺全局最短选店方案。
 5. 地图显示起点、目的地和道路折线；“理解与导航 → 分段导航”显示分段距离、时间及转向指引。预计用时不包含停留时间、实时路况或交通管制，POI 代表点会吸附至可通行道路，未必是实际入口。
 
-任一站类别匹配不足或半径内无地点时会阻止完整路线规划，后续依赖站保持未选状态。路线服务失败时保留地点选择以便重试，不用直线或驾车路线冒充步行路线。国贸默认样例实测“星巴克 → 嘉里健身”全程约 1.54 公里、20 分钟，两段真实步行道路路线；LLM 部分在该免密钥演示中使用固定测试桩。
+如果类别匹配不足，程序会把原始意图再作为名称/关键词搜索，例如“洗浴中心”会查找名称包含“洗浴中心”的真实地点；找到候选后在 GUI 展示并要求确认，不会把它误映射为健身房或公园。名称也找不到时才提示补充名称、增大范围或切换数据。任一站类别匹配不足且名称也无候选，或半径内无地点时会阻止完整路线规划，后续依赖站保持未选状态。路线服务失败时保留地点选择以便重试，不用直线或驾车路线冒充步行路线。国贸默认样例实测“星巴克 → 嘉里健身”全程约 1.54 公里、20 分钟，两段真实步行道路路线；LLM 部分在该免密钥演示中使用固定测试桩。
 
 ### 可选：导航到目的地附近停车场
 
@@ -250,7 +250,7 @@ print(con.execute("SELECT fclass, count(*) FROM ST_Read(?, layer = ?) GROUP BY f
 
 1. **意图与 SQL 分离。** LLM 只输出 `GeoIntent` 或含有顺序的 `GeoPlan`，分开记录类别/活动和具体目的地。字段名来自本地配置并进行标识符转义，类别由数据集词表映射产生，所有名称、类别、坐标、半径与数量值均用绑定参数传递。用户原文不进入 SQL。
 2. **本地跨语言映射。** 使用 FastEmbed 的 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`，在 CPU 上生成向量并计算余弦相似度。英文单语的 `bge-small-en-v1.5` 无法可靠完成中文到英文的类别匹配，因此默认采用多语言模型。类别从数据自动提取，无硬编码同义词表。缓存键包含模型名、预处理方式和完整类别词表，换数据类别后自动失效。
-3. **有条件地接受匹配。** 默认相似度至少 0.60，且领先第二名至少 0.03，否则列出可用类别。相似度不是概率。本样例实测“咖啡”→ `cafe` 约 0.773，“火锅”最近类别约 0.477，被拒绝。这个结果依赖模型和类别词表，不能保证任何数据集上的细分类别都会被拒绝；不要把通用 `restaurant` 当作已验证的火锅店。
+3. **有条件地接受匹配。** 默认相似度至少 0.60，且领先第二名至少 0.03，否则转入名称/关键词搜索，而不是强行选择最近类别。相似度不是概率。本样例实测“咖啡”→ `cafe` 约 0.773；“洗浴中心”若没有对应类别，会继续查找名称包含“洗浴中心”的地点。这个结果依赖模型、类别词表和名称数据；名称候选仍需用户确认。
 4. **真实米制距离。** 每个连接都设置 `geometry_always_xy = true`，统一使用经度、纬度。`ST_Distance_Spheroid` 计算 WGS84 椭球距离并返回米；普通 `ST_Distance` 在经纬度上给出的是角度坐标下的平面距离，不能直接当米。
 5. **索引筛选后精确过滤。** WGS84 `GEOMETRY` 上的 `ST_DWithin` 距离参数使用坐标单位，**不是默认米**。本实现先以保守的经纬度包围框运行 `ST_Intersects`，利用 R-Tree 缩小候选，再执行 `ST_Distance_Spheroid <= radius`，按距离升序排列。测试通过参数化 `EXPLAIN` 确认 `RTREE_INDEX_SCAN`，并覆盖跨日期变更线和极区。
 6. **按需加载。** 每次启动在内存中加载选定的小数据集，然后建 R-Tree。无需数据库服务；不加载全球 OSM。全局或大型数据应先裁剪，启动耗时仍会随输入文件增长。
@@ -323,7 +323,7 @@ GUI 和地图队列逐事件隔离异常，并始终重新安排轮询；后台�
 ```powershell
 python -m pip install setuptools wheel
 python -m pip wheel . --no-deps --no-build-isolation --wheel-dir dist
-python scripts/verify_wheel.py dist/geoask-0.2.0-py3-none-any.whl
+python scripts/verify_wheel.py dist/geoask-0.2.1-py3-none-any.whl
 ```
 
 安装冒烟会验证打包资源、真实 GPKG 加载、CLI 入口和本地 HTTP 兼容接口；Windows 上还初始化并关闭安装后的 GUI。真实桌面验证记录 `docs/gui-verification.json` 包含时间戳和生产代码 SHA256，检查模糊候选可见、轮询异常恢复、实际缩放、设置跨页保存、中文模板、道路路线和停车导航。`gui.png` 是初始界面，`gui-route.png` 是路线界面。

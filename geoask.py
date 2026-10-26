@@ -660,10 +660,9 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
                 click.echo("以上为待确认的名称候选，请核对地点或在 GUI 选择后规划路线。")
             return
         categories = [r[0] for r in con.execute("SELECT DISTINCT category FROM poi ORDER BY category").fetchall()]
-        if not categories:
-            raise GeoaskError("当前数据没有类别信息，请输入具体地点名称或配置类别字段。")
-        mapper = SemanticMapper(categories, settings) if needs_mapper(intent) else None
-        match = match_intent(intent, categories, settings, mapper)
+        mapper = SemanticMapper(categories, settings) if categories and needs_mapper(intent) else None
+        match = (match_intent(intent, categories, settings, mapper) if categories
+                 else CategoryMatch(None, "当前数据没有类别信息", 0, 0))
         if explain or dry_run:
             click.echo("理解过程:")
             click.echo(f"  意图词: {intent.intent}")
@@ -673,9 +672,27 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         if intent.modifiers:
             click.echo("提示: 当前数据无法验证描述条件，未应用: " + "、".join(intent.modifiers))
         if match.category is None:
+            from geoask_places import build_place_query, search_place
+            fallback_sql, fallback_params = build_place_query(intent.intent, center, limit, settings)
+            if explain or dry_run:
+                click.echo(f"  类别匹配不足，改用名称/关键词搜索: {intent.intent}")
+            if dry_run:
+                click.echo("名称搜索 SQL（占位符与参数分开；未执行地点查询）:\n" + fallback_sql)
+                click.echo("绑定参数: " + json.dumps(fallback_params, ensure_ascii=False))
+                return
+            fallback_results = search_place(con, intent.intent, center, limit, settings)
+            if fallback_results:
+                click.echo(f"类别匹配不足，已按名称/关键词“{intent.intent}”搜索。")
+                click.echo(f"结果 ({len(fallback_results)} 条):")
+                for i, row in enumerate(fallback_results, 1):
+                    click.echo(f"  {i}. {row['name'] or '(未命名地点)'}  [{row['category']}]  {row['dist_m']:.0f}m")
+                if fallback_results[0]['name_match_count'] > 1 or fallback_results[0]['name_rank'] > 0:
+                    click.echo("以上为名称候选，请补充完整名称或在 GUI 选择具体地点。")
+                return
             click.echo("未找到足够可信的类别匹配；请换一个更明确的地点类别。")
-            click.echo("可用类别: " + ", ".join(categories))
-            raise GeoaskError("类别匹配失败。")
+            if categories:
+                click.echo("可用类别: " + ", ".join(categories))
+            raise GeoaskError(f"类别匹配失败，名称中也未找到“{intent.intent}”。")
         if dry_run:
             sql, params = build_query(match.query_category, center, radius, limit)
             click.echo("SQL（占位符与参数分开；未执行邻近查询）:\n" + sql)

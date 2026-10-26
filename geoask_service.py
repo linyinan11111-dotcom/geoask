@@ -68,6 +68,8 @@ class QueryResult:
                     notes.append(f"第{i}站未应用描述条件：" + "、".join(stop.intent.modifiers))
                 if stop.blocked_reason:
                     notes.append(f"第{i}站：{stop.blocked_reason}")
+                if stop.resolution == "name-fallback":
+                    notes.append(f"第{i}站未达到类别匹配阈值，已按名称/关键词“{stop.intent.intent}”搜索；名称候选仍需确认。")
                 if stop.intent.place_name:
                     notes.append(f"第{i}站按名称/已核实别名查找“{stop.intent.place_name}”，不受附近半径限制；仅确认地点，不确认演出或营业安排。")
             if self.request.dry_run:
@@ -173,7 +175,26 @@ class QueryEngine:
                 progress("正在查找附近地点…")
                 rows = g.search(self.con, match.query_category, request.center, request.radius, request.limit,
                                 include_coordinates=True)
+        else:
+            stop = self._name_fallback_stop(intent, match, request, progress, settings)
+            return QueryResult(request, intent, stop.match, list(self.categories), stop.candidates,
+                               stop.sql, stop.params, self.data_count, [stop])
         return QueryResult(request, intent, match, list(self.categories), rows, sql, params, self.data_count)
+
+    def _name_fallback_stop(self, intent, category_match, request, progress, settings, center=None):
+        """Use a low-confidence intent as a name search instead of guessing a category."""
+        center = center or request.center
+        sql, params = places.build_place_query(intent.intent, center, request.limit, settings)
+        candidates = []
+        reason = (f"类别匹配不足（{category_match.best_candidate}，相似度 {category_match.similarity:.3f}），"
+                  f"已改用名称搜索“{intent.intent}”；请确认具体地点。")
+        if not request.dry_run:
+            progress(f"类别匹配不足，正在按名称搜索“{intent.intent}”…")
+            candidates = places.search_place(self.con, intent.intent, center, request.limit, settings)
+            if not candidates:
+                reason = (f"类别匹配不足且名称中没有找到“{intent.intent}”，请补充完整名称、增大范围或切换地区数据。")
+        return PlannedStop(intent, category_match, candidates, center, sql, params,
+                           None, reason, "name-fallback")
 
     def _run_plan(self, request, settings, progress):
         llm = request.llm or settings.llm
@@ -227,8 +248,10 @@ class QueryEngine:
                     else:
                         selected_index = 0
             elif match.category is None:
-                reason = ("当前数据没有类别信息，请输入具体地点名称或配置类别字段。" if self.mapper is None else
-                          f"类别匹配不足（{match.best_candidate}, {match.similarity:.3f}），未自动替换为其他类别。")
+                fallback = self._name_fallback_stop(intent, match, request, progress, settings, center)
+                stops.append(fallback)
+                center = (fallback.selected["longitude"], fallback.selected["latitude"]) if fallback.selected else None
+                continue
             else:
                 sql, params = g.build_query(match.query_category, center, request.radius, request.limit, include_coordinates=True)
                 if not request.dry_run:

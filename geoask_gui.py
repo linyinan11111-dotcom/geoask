@@ -910,11 +910,14 @@ class GeoaskApp(tk.Tk):
             resolution = (f"具体目的地：{stop.intent.place_name}；活动/类别：{stop.intent.intent}\n"
                           "名称/别名匹配：当前数据 + 配置的地名目录；不受附近半径限制\n"
                           if stop.intent.place_name else
-                          f"语义映射：{stop.match.best_candidate}，相似度 {stop.match.similarity:.3f}\n"
-                          f"搜索半径：{result.request.radius:g} 米\n")
+                          (f"类别匹配不足，已改用名称/关键词搜索：{stop.intent.intent}\n"
+                           f"原类别候选：{stop.match.best_candidate}，相似度 {stop.match.similarity:.3f}\n"
+                           if stop.resolution == "name-fallback" else
+                           f"语义映射：{stop.match.best_candidate}，相似度 {stop.match.similarity:.3f}\n")
+                          + f"搜索半径：{result.request.radius:g} 米\n")
             if stop.intent.place_candidates:
                 resolution += "模型提供的名称候选（需本地核对）：" + "、".join(stop.intent.place_candidates) + "\n"
-            if stop.candidates and stop.intent.place_name:
+            if stop.candidates and (stop.intent.place_name or stop.resolution == "name-fallback"):
                 resolution += "匹配方式：" + {0: "数据名称/别名", 1: "模型名称候选，需确认", 2: "名称包含，需确认"}[stop.candidates[0]['name_rank']] + "\n"
             explanations.append(f"第 {i+1} 站：{label}\n" + resolution +
                                 f"距离参考中心：{stop.center}\n"
