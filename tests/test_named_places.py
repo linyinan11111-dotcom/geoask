@@ -103,6 +103,11 @@ def test_named_query_uses_literal_substrings_and_supports_custom_data():
         assert con.execute('SELECT count(*) FROM poi').fetchone()[0] == 1
 
 
+def test_generic_center_suffix_can_match_imported_name():
+    assert places.name_search_terms('洗浴中心') == ['洗浴中心', '洗浴']
+    assert places.name_search_terms('咖啡') == ['咖啡']
+
+
 def test_named_cli_skips_embeddings_and_prints_destination(monkeypatch):
     monkeypatch.setattr(g, 'parse_intent', lambda *a: named())
     monkeypatch.setattr(g, 'SemanticMapper', lambda *a: pytest.fail('CLI used category embedding'))

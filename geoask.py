@@ -672,7 +672,7 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         if intent.modifiers:
             click.echo("提示: 当前数据无法验证描述条件，未应用: " + "、".join(intent.modifiers))
         if match.category is None:
-            from geoask_places import build_place_query, search_place
+            from geoask_places import build_place_query, search_place_with_variants
             fallback_sql, fallback_params = build_place_query(intent.intent, center, limit, settings)
             if explain or dry_run:
                 click.echo(f"  类别匹配不足，改用名称/关键词搜索: {intent.intent}")
@@ -680,7 +680,7 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
                 click.echo("名称搜索 SQL（占位符与参数分开；未执行地点查询）:\n" + fallback_sql)
                 click.echo("绑定参数: " + json.dumps(fallback_params, ensure_ascii=False))
                 return
-            fallback_results = search_place(con, intent.intent, center, limit, settings)
+            fallback_results = search_place_with_variants(con, intent.intent, center, limit, settings)
             if fallback_results:
                 click.echo(f"类别匹配不足，已按名称/关键词“{intent.intent}”搜索。")
                 click.echo(f"结果 ({len(fallback_results)} 条):")

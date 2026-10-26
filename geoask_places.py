@@ -12,6 +12,26 @@ def name_key(value: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or ""))).casefold()
 
 
+def name_search_terms(value: str) -> list[str]:
+    """Return conservative name forms for a generic destination query.
+
+    A category-like phrase such as ``洗浴中心`` is often written in OSM as
+    ``某某洗浴``.  The full phrase is always tried first; removing only a
+    generic suffix is a second, explicit name search and never a category
+    mapping.  This keeps the fallback useful for imported data without
+    turning arbitrary words into broad fuzzy matches.
+    """
+    original = str(value or "").strip()
+    if not name_key(original):
+        return []
+    terms = [original]
+    for suffix in ("中心", "场所", "機構", "机构"):
+        if original.endswith(suffix) and len(name_key(original[:-len(suffix)])) >= 2:
+            terms.append(original[:-len(suffix)])
+            break
+    return list(dict.fromkeys(terms))
+
+
 def prepare_places(con, settings: g.Settings):
     """Index names/aliases from the active data, plus an optional regional catalogue."""
     if con.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'named_places'").fetchone()[0]:
@@ -112,3 +132,12 @@ def search_place(con, place_name, center, limit, settings, candidates=()):
     cursor = con.execute(sql, params)
     rows = [dict(zip([d[0] for d in cursor.description], r)) for r in cursor.fetchall()]
     return rows
+
+
+def search_place_with_variants(con, place_name, center, limit, settings, candidates=()):
+    """Search the original name and conservative generic-suffix variants."""
+    for term in name_search_terms(place_name):
+        rows = search_place(con, term, center, limit, settings, candidates)
+        if rows:
+            return rows
+    return []

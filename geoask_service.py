@@ -164,9 +164,11 @@ class QueryEngine:
             return QueryResult(request, intent, stop.match, list(self.categories), stop.candidates,
                                stop.sql, stop.params, self.data_count, [stop])
         progress("正在匹配地点类别…")
-        if self.mapper is None and g.needs_mapper(intent):
-            raise g.GeoaskError("当前数据没有类别信息，请查询具体地点名称，或在字段映射中配置类别字段。")
-        match = g.match_intent(intent, self.categories, settings, self.mapper)
+        # A dataset without a category column can still answer a name query.
+        # Keep the same name fallback used by the CLI instead of failing before
+        # the user's phrase is checked against imported place names.
+        match = (g.match_intent(intent, self.categories, settings, self.mapper)
+                 if self.categories else g.CategoryMatch(None, "当前数据没有类别信息", 0, 0))
         sql, params, rows = "", [], []
         if match.category is not None:
             sql, params = g.build_query(match.query_category, request.center, request.radius, request.limit,
@@ -190,7 +192,8 @@ class QueryEngine:
                   f"已改用名称搜索“{intent.intent}”；请确认具体地点。")
         if not request.dry_run:
             progress(f"类别匹配不足，正在按名称搜索“{intent.intent}”…")
-            candidates = places.search_place(self.con, intent.intent, center, request.limit, settings)
+            candidates = places.search_place_with_variants(
+                self.con, intent.intent, center, request.limit, settings)
             if not candidates:
                 reason = (f"类别匹配不足且名称中没有找到“{intent.intent}”，请补充完整名称、增大范围或切换地区数据。")
         return PlannedStop(intent, category_match, candidates, center, sql, params,
