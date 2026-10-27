@@ -58,8 +58,10 @@ def main():
                '--copy-metadata', 'fastembed', '--copy-metadata', 'onnxruntime',
                '--collect-all', 'onnxruntime', '--collect-all', 'tokenizers',
                '--collect-submodules', 'fastembed',
+               '--collect-all', 'webview',
                '--add-data', f'{ROOT / "config.yaml"};geoask_resources',
                '--add-data', f'{ROOT / "data"};geoask_resources/data',
+               '--add-data', f'{ROOT / "web"};geoask_resources/web',
                '--add-data', f'{ROOT / "scripts/get_location.ps1"};geoask_resources/scripts',
                '--add-binary', f'{extension};geoask_resources']
     for name in ['torch', 'tensorflow', 'transformers', 'pandas', 'scipy', 'matplotlib', 'IPython', 'pytest']:

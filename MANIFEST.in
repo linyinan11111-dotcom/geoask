@@ -3,6 +3,7 @@ recursive-include data *.gpkg *.json *.txt
 include scripts/get_location.ps1
 include requirements-dev.txt 启动界面.cmd
 include requirements-build.txt
-recursive-include scripts *.py
+recursive-include scripts *.py *.mjs
 recursive-include tests *.py
 recursive-include docs *.md
+recursive-include web *.html *.js *.css *.svg

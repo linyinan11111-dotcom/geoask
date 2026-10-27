@@ -46,6 +46,7 @@ import json, os
 from pathlib import Path
 import geoask as g
 import geoask_gui
+import geoask_web
 import geoask_credentials
 geoask_credentials.connection_file = lambda: Path('smoke-connection.dat').resolve()
 from importlib.metadata import metadata
@@ -55,6 +56,26 @@ assert package['Version'] == g.__version__
 assert package['Description-Content-Type'] == 'text/markdown' and package['License-Expression'] == 'MIT'
 assert Path(g.__file__).is_relative_to(Path(__import__('sys').prefix))
 assert g.DEFAULT_CONFIG.is_file() and g.location_script().is_file()
+assert geoask_web.frontend_file('index.html').is_file()
+assert geoask_web.frontend_file('app.js').is_file()
+import threading
+from urllib.request import urlopen, Request
+webapp = geoask_web.WebApp()
+webserver = geoask_web.WebServer(webapp)
+webthread = threading.Thread(target=webserver.serve_forever, daemon=True)
+webthread.start()
+try:
+    with urlopen(webserver.origin) as response:
+        html = response.read()
+        assert b'__GEOASK_TOKEN__' not in html and b'/app.js' in html
+    request = Request(webserver.origin + '/api/config', headers={'X-Geoask-Token': webapp.token})
+    with urlopen(request) as response:
+        assert json.load(response)['version'] == g.__version__
+finally:
+    webserver.shutdown()
+    webserver.server_close()
+    webthread.join(timeout=5)
+    webapp.close()
 settings = g.read_settings(g.DEFAULT_CONFIG)
 local_llm = settings.llm.model_copy(update={'api_key_env': 'GEOASK_WHEEL_SMOKE_ABSENT'})
 os.environ.pop(local_llm.api_key_env, None)
@@ -102,6 +123,7 @@ print('installed resources, spatial data, GUI initialization: OK')
             cli = scripts / ("geoask.exe" if os.name == "nt" else "geoask")
             env["DEEPSEEK_API_KEY"] = "local-smoke-test"
             run([cli, "--help"])
+            run([scripts / ("geoask-gui.exe" if os.name == "nt" else "geoask-gui"), "--help"])
             output = run([cli, "去国家体育场", "--config", directory / "installed-config.yaml", "--explain"])
             assert "国家体育场" in output.stdout and "结果 (1 条)" in output.stdout
             print("installed geoask entry point + local compatible HTTP API + named search: OK")

@@ -13,6 +13,7 @@ def smoke(output: Path, model_cache: Path | None = None):
     import geoask_credentials as credentials
     from geoask_places import search_place
     from geoask_gui import GeoaskApp
+    from geoask_web import WebApp, WebServer, frontend_file
 
     report = {"version": g.__version__, "frozen": bool(getattr(sys, "frozen", False))}
     with tempfile.TemporaryDirectory(prefix="geoask-desktop-smoke-") as folder:
@@ -30,6 +31,24 @@ def smoke(output: Path, model_cache: Path | None = None):
         assert credentials.saved_api_key(settings.llm.model_dump()) == "desktop-smoke-not-a-real-key"
         credentials.clear_connection()
         report["local_credentials"] = True
+        import threading
+        from urllib.request import urlopen, Request
+        from contextlib import closing
+        webapp = WebApp()
+        with closing(WebServer(webapp)) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urlopen(server.origin) as response:
+                    assert b'__GEOASK_TOKEN__' not in response.read()
+                request = Request(server.origin + '/api/config', headers={'X-Geoask-Token': webapp.token})
+                with urlopen(request) as response:
+                    assert json.load(response)['version'] == g.__version__
+                assert frontend_file('app.js').is_file()
+                report['web_frontend'] = True
+            finally:
+                server.shutdown()
+                webapp.close()
         if model_cache:
             settings.cache_dir = model_cache.resolve()
             mapper = g.SemanticMapper(['cafe', 'restaurant', 'park', 'fitness_centre'], settings)
@@ -52,6 +71,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", type=Path)
     parser.add_argument("--model-cache", type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--browser", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         try:
@@ -63,7 +86,7 @@ def main():
             raise SystemExit(1)
         return
     try:
-        from geoask_gui import main as gui_main
+        from geoask_web import main as gui_main
         gui_main()
     except Exception:
         from geoask_runtime import get_logger

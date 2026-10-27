@@ -38,7 +38,7 @@ geoask 是一款自然语言地点查询与行程规划工具。通过 DeepSeek 
 
 路线保留你指定的访问顺序；附近类别查询默认逐站选择最近候选，不保证全局最短行程。地点查询与道路路线来自高德地图，语言模型负责理解需求。
 
-![geoask 多站行程与路径规划](docs/gui-route.png)
+![geoask 自然语言出行规划界面](docs/web-ui.png)
 
 ## 开始使用
 
@@ -52,10 +52,12 @@ geoask 是一款自然语言地点查询与行程规划工具。通过 DeepSeek 
 
 ```powershell
 python -m pip install -r requirements.txt -e .
-python geoask_gui.py
+python geoask_web.py
 ```
 
-Windows 也可以在安装依赖后双击 `启动界面.cmd`。Linux 如缺少 Tkinter，需安装系统的 `python3-tk` 包。
+Windows 也可以在安装依赖后双击 `启动界面.cmd`，安装项目后可运行 `geoask-gui`。HTML / JavaScript / CSS 界面直接显示在独立桌面窗口中，无需打开浏览器；关闭窗口即停止本次服务。Windows 使用系统的 Edge WebView2 Runtime。
+
+需要地区配置时，可使用 `python geoask_web.py --config config.yaml`；需要浏览器方式时添加 `--browser`。详见[前端与本地接口说明](docs/web-frontend.md)。
 
 ### 第一次查询
 

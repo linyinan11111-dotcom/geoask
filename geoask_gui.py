@@ -1279,8 +1279,8 @@ class GeoaskApp(tk.Tk):
 
 
 def main():
-    app = GeoaskApp()
-    app.mainloop()
+    from geoask_web import main as web_main
+    web_main()
 
 
 if __name__ == "__main__":

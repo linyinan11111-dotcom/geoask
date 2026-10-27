@@ -21,11 +21,14 @@ def _amap_search(query, center, radius, limit, settings):
                          api_key, security_code=security_code)
 
 
-def _amap_credentials(settings):
+def _amap_credentials(settings, request=None):
     """Resolve strict Amap Web-service credentials; never fall back to OSM."""
     if not settings.amap.enabled:
         raise g.GeoaskError("高德数据源未启用，请在配置中设置 amap.enabled: true。")
-    key, security_code = g.resolve_amap_credentials(settings.amap)
+    if request is not None and request.amap_key is not None:
+        key, security_code = request.amap_key, request.amap_security_code or ""
+    else:
+        key, security_code = g.resolve_amap_credentials(settings.amap)
     if not key:
         raise g.GeoaskError("尚未配置高德 Web 服务 Key。请保存 AMAP_WEB_KEY 或在接口设置中填写高德 Key。")
     return key, security_code
@@ -80,6 +83,8 @@ class QueryRequest:
     # True means strict Amap Web services for POI, parking and routing; the
     # local OSM dataset is not used at all.
     amap: bool = False
+    amap_key: str | None = field(default=None, repr=False)
+    amap_security_code: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -275,7 +280,7 @@ class QueryEngine:
         return [intent], "walking"
 
     def _run_amap(self, request, settings, progress):
-        key, security_code = _amap_credentials(settings)
+        key, security_code = _amap_credentials(settings, request)
         intents, travel_mode = self._parse_amap_intents(request, settings, progress, key, security_code)
         stops = self._amap_choose_stops(intents, request, settings, progress, key, security_code)
         first = stops[0]
@@ -438,7 +443,7 @@ class QueryEngine:
             raise g.GeoaskError("请选择有效的候选地点。")
         settings = g.read_settings(result.request.config_path)
         if result.request.amap or settings.amap.primary:
-            key, security_code = _amap_credentials(settings)
+            key, security_code = _amap_credentials(settings, result.request)
             prefix = [*result.stops[:stop_index], replace(stop, selected_index=candidate_index, blocked_reason="")]
             remaining = [s.intent for s in result.stops[stop_index+1:]]
             stops = self._amap_choose_stops(remaining, result.request, settings, progress,
@@ -462,7 +467,7 @@ class QueryEngine:
             if not 0 < radius <= 5000:
                 raise g.GeoaskError("停车搜索半径必须在 0–5000 米之间。")
             route_points(result)
-            key, security_code = _amap_credentials(settings)
+            key, security_code = _amap_credentials(settings, result.request)
             progress("正在查找最后一站附近的高德停车场…")
             destination = result.stops[-1].selected
             center = (destination["longitude"], destination["latitude"])
