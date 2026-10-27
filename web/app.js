@@ -2,7 +2,7 @@ import {TripMap} from './map.js';
 
 const $=id=>document.getElementById(id);
 const token=document.querySelector('meta[name="geoask-token"]').content;
-const state={config:null,center:[116.46,39.92],originName:'自定义起点',result:null,route:null,parking:null,route_parking:null,mode:'walking',busy:false,activeStop:0,toastTimer:null};
+const state={config:null,center:[116.46,39.92],originName:'自定义起点',result:null,route:null,parking:null,route_parking:null,mode:'walking',busy:false,activeStop:0,choosingTrip:false,toastTimer:null};
 const modeNames={walking:'步行',cycling:'骑行',driving:'驾车'};
 const distance=n=>n>=1000?`${(n/1000).toFixed(2)} 公里`:`${Math.round(n)} 米`;
 const duration=n=>n>=3600?`${Math.floor(n/3600)} 小时 ${Math.round(n%3600/60)} 分钟`:`${Math.max(1,Math.round(n/60))} 分钟`;
@@ -10,7 +10,7 @@ function icon(name){const svg=document.createElementNS('http://www.w3.org/2000/s
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!=null)node.textContent=text;return node;}
 function status(text,error=false){$('status-text').textContent=text;$('status').classList.toggle('error',error);}
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(state.toastTimer);state.toastTimer=setTimeout(()=>$('toast').hidden=true,5500);}
-function dialog(id){$(id).showModal();}
+function dialog(id){if(!$(id).open)$(id).showModal();}
 function closeDialogs(){document.querySelectorAll('dialog[open]').forEach(d=>d.close());}
 
 async function api(path,body){
@@ -25,6 +25,9 @@ function busy(value){
   state.busy=value;document.body.classList.toggle('is-busy',value);$('status').classList.toggle('busy',value);
   for(const node of document.querySelectorAll('#query-form button,#query-form input,#query-form textarea,#query-form select,#settings-form button,#settings-form input,#settings-form select,#origin-button,#locate,#settings-button,#origin-form button,#origin-form input,#candidates-list button,.stop-place,.mode-picker button,#parking-enabled,#find-parking,#parking-radius,#parking-select'))node.disabled=value;
   $('query-submit').firstElementChild.textContent=value?'正在安排这段旅程…':'理解需求，发现地点';
+  document.querySelectorAll('.stop-place').forEach((button,i)=>{button.disabled=value||!state.result?.stops[i]?.candidates.length;});
+  document.querySelectorAll('.candidate-tab').forEach((button,i)=>{button.disabled=value||!state.result?.stops[i]?.candidates.length;});
+  $('review-trip').disabled=value||!state.result?.stops.some(s=>s.candidates.length);
   updateActions();
 }
 async function poll(job){
@@ -76,7 +79,7 @@ async function setOrigin(point,name='地图选定起点'){
 }
 const map=new TripMap($('map'),{
   onOrigin:p=>setOrigin(p),
-  onCandidate:(stop,index)=>{if(state.busy)return;if(index==null)showCandidates(stop);else choose(stop,index);},
+  onCandidate:(stop,index)=>{if(state.busy)return;showCandidates(stop,{highlight:index});},
   onError:text=>{$('map-message').hidden=!text;$('map-message').textContent=text;}
 });
 function markers(){
@@ -84,10 +87,10 @@ function markers(){
   if(!state.result)return data;
   state.result.stops.forEach((s,i)=>{
     const p=s.candidates[s.selected_index];
-    if(p)data.push({kind:'stop',point:[p.longitude,p.latitude],label:String(i+1),name:p.name||'未命名地点',stop:i});
+    if(p)data.push({kind:'stop',point:[p.longitude,p.latitude],label:String(i+1),name:p.name||'未命名地点',stop:i,active:i===state.activeStop});
   });
   const active=state.result.stops[state.activeStop];
-  active?.candidates.forEach((p,i)=>{if(i!==active.selected_index)data.push({kind:'candidate',point:[p.longitude,p.latitude],label:String(i+1),name:p.name||'未命名地点',stop:state.activeStop,index:i});});
+  active?.candidates.forEach((p,i)=>{if(i!==active.selected_index)data.push({kind:'candidate',point:[p.longitude,p.latitude],label:String.fromCharCode(65+i),name:p.name||'未命名地点',stop:state.activeStop,index:i});});
   if(state.route_parking){const p=state.route_parking;data.push({kind:'parking',label:'P',point:[p.longitude,p.latitude],name:p.name||'未命名停车场'});}
   return data;
 }
@@ -108,10 +111,11 @@ function render(){
       const place=s.candidates[s.selected_index],block=el('article',`stop ${i===state.activeStop?'active':''} ${!place?'warning':''}`);
       block.append(el('span','stop-number',i+1));
       const label=el('div','stop-label');label.append(el('span','',s.intent.place_name||s.intent.intent),el('small','stop-selected',place?'已选择':r.dry_run?'仅预览':'待选择'));block.append(label);
-      const button=el('button','stop-place');button.type='button';button.disabled=!s.candidates.length||state.busy;
+      const button=el('button','stop-place');button.type='button';button.disabled=!s.candidates.length||state.busy;button.setAttribute('aria-haspopup','dialog');
       const copy=el('span');copy.append(el('strong','',place?.name|| (r.dry_run?'预览：'+(s.intent.place_name||s.intent.intent):s.candidates.length?'选择具体地点':'等待前站 / 暂无地点')));
       copy.append(el('small','',place?`距${i?'前一站':'起点'} ${distance(place.dist_m)} · ${s.candidates.length} 个候选`:s.candidates.length?`${s.candidates.length} 个候选地点可选`:'确认前一站后继续查询'));
-      button.append(copy,icon('chevron'));button.addEventListener('click',()=>showCandidates(i));block.append(button);
+      const cta=el('span','stop-select-action',place?'更换地点':'选择地点');cta.append(icon('chevron'));
+      button.append(copy,cta);button.addEventListener('click',()=>showCandidates(i));block.append(button);
       if(s.blocked_reason)block.append(el('p','stop-reason',s.blocked_reason));
       if(s.intent.modifiers.length)block.append(el('p','stop-modifiers',`未用于筛选：${s.intent.modifiers.join('、')}`));
       $('stops').append(block);
@@ -154,23 +158,38 @@ function renderParking(){
   select.value=previous;select.hidden=!state.parking.candidates.length;
   $('parking-note').textContent=state.parking.summary;
 }
-function showCandidates(index){
+function showCandidates(index,{flow=false,highlight=null}={}){
   if(state.busy||!state.result)return;
-  state.activeStop=index;const stop=state.result.stops[index];if(!stop)return;
-  $('candidates-heading').textContent=`第 ${index+1} 站 · ${stop.intent.place_name||stop.intent.intent}`;
-  $('candidates-description').textContent=`按距${index?'前一站':'起点'}的直线距离排序。选择后会重新查询后续站点。`;
+  state.activeStop=index;state.choosingTrip=flow;const stop=state.result.stops[index];if(!stop?.candidates.length)return;
+  $('candidates-heading').textContent=`为第 ${index+1} 站选择地点`;
+  $('candidates-description').textContent=`${stop.intent.place_name||stop.intent.intent} · 按距${index?'前一站':'起点'}的直线距离排序。${index<state.result.stops.length-1?'选择后重新查询后续站点。':'点击下方地点确认选择。'}`;
+  $('candidate-tabs').replaceChildren();
+  state.result.stops.forEach((s,i)=>{
+    const tab=el('button',`candidate-tab ${i===index?'active':''}`);tab.type='button';tab.disabled=!s.candidates.length;
+    tab.append(el('span','',i+1),el('strong','',s.intent.place_name||s.intent.intent));
+    tab.setAttribute('aria-current',i===index?'step':'false');
+    tab.addEventListener('click',()=>showCandidates(i,{flow:state.choosingTrip}));$('candidate-tabs').append(tab);
+  });
+  $('candidate-progress').textContent=flow?`第 ${index+1} / ${state.result.stops.length} 站 · 选定后继续下一站`:'点击地点即可确认，也可切换上方站点。';
+  $('candidate-dismiss').textContent=flow?(state.result.stops.every(s=>s.selected_index!=null)?'先用当前地点，返回行程':'稍后选择，返回行程'):'返回行程';
   $('candidates-list').replaceChildren();
   stop.candidates.forEach((p,i)=>{
-    const button=el('button',`candidate ${i===stop.selected_index?'current':''}`);button.type='button';
+    const button=el('button',`candidate ${i===stop.selected_index?'current':''} ${i===highlight?'highlighted':''}`);button.type='button';
     const text=el('span','candidate-text');text.append(el('strong','',p.name||'未命名地点'),el('small','',`${p.category||'地点'} · ${distance(p.dist_m)} · ${p.longitude.toFixed(5)}, ${p.latitude.toFixed(5)}`));
-    button.append(el('span','candidate-number',i+1),text,icon(i===stop.selected_index?'check':'chevron'));
+    const callout=el('span','candidate-action',i===stop.selected_index?'确认此地点':'选择此地点');callout.append(icon(i===stop.selected_index?'check':'chevron'));
+    button.append(el('span','candidate-number',String.fromCharCode(65+i)),text,callout);
     button.addEventListener('click',()=>choose(index,i));$('candidates-list').append(button);
   });
   renderMap();dialog('candidates-dialog');
+  if(highlight!=null)$('candidates-list').children[highlight]?.focus();
 }
 async function choose(stop,index){
-  if(state.busy)return;closeDialogs();
-  await action('select',{result_id:state.result.id,stop,index},()=>{status('地点已更换，后续站点已重新查询。');fitMap();});
+  if(state.busy)return;const flow=state.choosingTrip;closeDialogs();
+  const result=await action('select',{result_id:state.result.id,stop,index},()=>{status('地点已确认，后续站点已重新查询。');fitMap();});
+  if(!result){showCandidates(stop,{flow});return;}
+  const next=state.result.stops.findIndex((s,i)=>i>stop&&s.candidates.length&&(flow||s.selected_index==null));
+  if(next>=0)showCandidates(next,{flow:true});
+  else if(flow)status(state.result.stops.every(s=>s.selected_index!=null)?'地点选择完成，可以规划路线；需要时可点击“选择行程地点”调整。':'部分站点暂无可选地点，请调整搜索范围或更换前一站。');
 }
 function settingsForm(){
   const c=state.config;if(!c)return;
@@ -189,17 +208,27 @@ document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{co
 $('settings-button').addEventListener('click',settingsForm);
 $('settings-dialog').addEventListener('close',()=>{for(const id of ['llm-key','amap-key','amap-code'])$(id).value='';});
 $('help-button').addEventListener('click',()=>dialog('help-dialog'));
+$('review-trip').addEventListener('click',()=>{
+  const pending=state.result?.stops.findIndex(s=>s.candidates.length&&s.selected_index==null);
+  const first=state.result?.stops.findIndex(s=>s.candidates.length);
+  if(first>=0)showCandidates(pending>=0?pending:first,{flow:true});
+});
+$('candidate-dismiss').addEventListener('click',()=>{$('candidates-dialog').close();state.choosingTrip=false;});
 $('query').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();$('query-form').requestSubmit();}});
 document.querySelectorAll('[data-query]').forEach(b=>b.addEventListener('click',()=>{$('query').value=b.dataset.query;$('query').focus();}));
 $('query-form').addEventListener('submit',async e=>{
   e.preventDefault();if(state.busy)return;
   if(!state.config.has_llm_key||(state.config.online&&!state.config.has_amap_key)){settingsForm();toast('先配置语言理解和地图密钥，就可以开始查询。');return;}
   state.activeStop=0;$('parking-enabled').checked=false;
-  await action('query',{query:$('query').value.trim(),center:state.center,radius:Number($('radius').value),limit:10,dry_run:$('preview').checked},()=>{
+  const result=await action('query',{query:$('query').value.trim(),center:state.center,radius:Number($('radius').value),limit:10,dry_run:$('preview').checked},()=>{
     state.mode=state.result.travel_mode;renderModes();renderRoute();
     fitMap();status(state.result.dry_run?'已理解需求；预览模式未执行地点搜索。':state.result.stops.every(s=>s.selected_index!=null)?'地点已就绪，选择出行方式后规划路线。':'请确认具体地点，继续安排你的行程。');
     $('trip-heading').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
   });
+  if(result&&!state.result.dry_run){
+    const first=state.result.stops.findIndex(s=>s.candidates.length);
+    if(first>=0)showCandidates(first,{flow:true});
+  }
 });
 $('origin-button').addEventListener('click',()=>{$('longitude').value=state.center[0].toFixed(6);$('latitude').value=state.center[1].toFixed(6);dialog('origin-dialog');});
 $('origin-form').addEventListener('submit',e=>{e.preventDefault();closeDialogs();setOrigin([Number($('longitude').value),Number($('latitude').value)],'自定义起点');});

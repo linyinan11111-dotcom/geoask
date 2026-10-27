@@ -132,10 +132,14 @@ export class TripMap {
     for(const marker of markers){
       const button=document.createElement('button');button.type='button';
       button.className=marker.kind==='origin'?'origin-marker':marker.kind==='candidate'?'candidate-marker':marker.kind==='parking'?'parking-marker':'stop-marker';
-      button.textContent=marker.kind==='origin'?'':marker.label;
+      if(marker.active)button.classList.add('active-marker');
+      const face=document.createElement('span');face.className='marker-face';
+      face.textContent=marker.kind==='origin'?'起':marker.label;button.append(face);
       button.title=marker.name;button.setAttribute('aria-label',marker.name);
       if(marker.kind!=='candidate'){
-        const label=document.createElement('span');label.className='marker-label';label.textContent=marker.name;button.append(label);
+        const label=document.createElement('span');label.className='marker-label';
+        const type=document.createElement('b');type.textContent=marker.kind==='origin'?'起点':marker.kind==='parking'?'停车场':`第 ${marker.label} 站`;
+        label.append(type,document.createTextNode(marker.name));button.append(label);
       }
       button.addEventListener('click',()=>{
         if(marker.kind==='candidate')this.onCandidate(marker.stop,marker.index);
