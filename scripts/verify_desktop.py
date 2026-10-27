@@ -39,7 +39,8 @@ def main():
         if args.model_cache:
             command += ['--model-cache', str(args.model_cache.resolve())]
         env = os.environ.copy()
-        for name in ['PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY']:
+        for name in ['PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY',
+                     'AMAP_API_KEY', 'AMAP_WEB_SERVICE_KEY', 'AMAP_SECURITY_CODE']:
             env.pop(name, None)
         env['LOCALAPPDATA'] = str(directory / 'private-user-data')
         env['PATH'] = str(Path(os.environ['SystemRoot']) / 'System32')
@@ -56,7 +57,9 @@ def main():
                       returncode=process.returncode, isolated_user_storage=True, outside_checkout=True,
                       embedding_source='existing local cache' if args.model_cache else 'not exercised',
                       code_sha256={p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                                   [ROOT / 'geoask.py', ROOT / 'scripts/desktop_entry.py', ROOT / 'scripts/build_desktop.py']})
+                                   [ROOT / 'geoask.py', ROOT / 'geoask_web.py', ROOT / 'scripts/desktop_entry.py',
+                                    ROOT / 'scripts/build_desktop.py', *sorted((ROOT / 'web').rglob('*.js')),
+                                    *sorted((ROOT / 'web').glob('*.css')), ROOT / 'web/index.html']})
         (ROOT / 'docs/desktop-verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps(report, ensure_ascii=False, indent=2))
         if process.returncode or not report.get('passed'):

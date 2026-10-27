@@ -58,6 +58,11 @@ assert Path(g.__file__).is_relative_to(Path(__import__('sys').prefix))
 assert g.DEFAULT_CONFIG.is_file() and g.location_script().is_file()
 assert geoask_web.frontend_file('index.html').is_file()
 assert geoask_web.frontend_file('app.js').is_file()
+for asset in ('glass.js', 'glass.css', 'vendor/lens/LICENSE.txt', 'vendor/lens/tokens.js',
+              'vendor/lens/internal/renderer.js', 'vendor/lens/internal/jelly.js',
+              'vendor/lens/internal/jelly-physics.js', 'vendor/lens/internal/optics.js',
+              'vendor/lens/internal/context-budget.js'):
+    assert geoask_web.frontend_file(asset).is_file(), asset
 import threading
 from urllib.request import urlopen, Request
 webapp = geoask_web.WebApp()
@@ -68,6 +73,11 @@ try:
     with urlopen(webserver.origin) as response:
         html = response.read()
         assert b'__GEOASK_TOKEN__' not in html and b'/app.js' in html
+    for asset in ('glass.js', 'glass.css', 'vendor/lens/tokens.js', 'vendor/lens/internal/renderer.js',
+                  'vendor/lens/internal/jelly.js', 'vendor/lens/internal/jelly-physics.js',
+                  'vendor/lens/internal/optics.js', 'vendor/lens/internal/context-budget.js'):
+        with urlopen(webserver.origin + '/' + asset) as response:
+            assert response.read() == geoask_web.frontend_file(asset).read_bytes(), asset
     request = Request(webserver.origin + '/api/config', headers={'X-Geoask-Token': webapp.token})
     with urlopen(request) as response:
         assert json.load(response)['version'] == g.__version__

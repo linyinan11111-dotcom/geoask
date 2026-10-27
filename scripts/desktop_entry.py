@@ -12,8 +12,7 @@ def smoke(output: Path, model_cache: Path | None = None):
     import geoask as g
     import geoask_credentials as credentials
     from geoask_places import search_place
-    from geoask_gui import GeoaskApp
-    from geoask_web import WebApp, WebServer, frontend_file
+    from geoask_web import WebApp, WebServer, frontend_file, run_desktop
 
     report = {"version": g.__version__, "frozen": bool(getattr(sys, "frozen", False))}
     with tempfile.TemporaryDirectory(prefix="geoask-desktop-smoke-") as folder:
@@ -33,9 +32,11 @@ def smoke(output: Path, model_cache: Path | None = None):
         report["local_credentials"] = True
         import threading
         from urllib.request import urlopen, Request
-        from contextlib import closing
+        # The shipped binary probe must never load a user's provider credentials.
+        g.resolve_api_key = lambda settings: ''
+        g.resolve_amap_credentials = lambda settings: ('', '')
         webapp = WebApp()
-        with closing(WebServer(webapp)) as server:
+        with WebServer(webapp) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -44,7 +45,13 @@ def smoke(output: Path, model_cache: Path | None = None):
                 request = Request(server.origin + '/api/config', headers={'X-Geoask-Token': webapp.token})
                 with urlopen(request) as response:
                     assert json.load(response)['version'] == g.__version__
-                assert frontend_file('app.js').is_file()
+                for asset in ('app.js', 'map.js', 'style.css', 'glass.css', 'glass.js',
+                              'vendor/lens/tokens.js', 'vendor/lens/internal/renderer.js',
+                              'vendor/lens/internal/optics.js', 'vendor/lens/internal/context-budget.js',
+                              'vendor/lens/internal/jelly.js', 'vendor/lens/internal/jelly-physics.js'):
+                    with urlopen(server.origin + '/' + asset) as response:
+                        assert response.read() == frontend_file(asset).read_bytes(), asset
+                assert frontend_file('vendor/lens/LICENSE.txt').is_file()
                 report['web_frontend'] = True
             finally:
                 server.shutdown()
@@ -54,15 +61,46 @@ def smoke(output: Path, model_cache: Path | None = None):
             mapper = g.SemanticMapper(['cafe', 'restaurant', 'park', 'fitness_centre'], settings)
             assert mapper.match('咖啡').category == 'cafe'
             report["real_embedding"] = True
-        app = GeoaskApp()
+        native_app = WebApp()
+        native_server = WebServer(native_app)
+        def loaded(window):
+            import time
+            try:
+                deadline = time.monotonic() + 25
+                while time.monotonic() < deadline:
+                    rendered = window.evaluate_js("""({
+                        ready:!document.body.classList.contains('is-busy'),
+                        title:document.title,
+                        markers:document.querySelectorAll('.origin-marker').length,
+                        desktop:document.querySelector('#service-badge').textContent,
+                        material:document.querySelector('.planner-glass-canvas')?.dataset.gpuState,
+                        bevels:document.querySelectorAll('.glass-bevel').length,
+                        query:document.querySelector('.planner-heading h1')?.textContent
+                    })""")
+                    if rendered and rendered['ready'] and rendered['markers'] == 1 and rendered.get('material') in ('active', 'suspended'):
+                        break
+                    time.sleep(.1)
+                assert rendered['ready'] and rendered['markers'] == 1, rendered
+                assert rendered['title'] == 'geoask · 地点查询与路线规划', rendered
+                assert rendered['desktop'] == '桌面应用已就绪', rendered
+                assert rendered['query'] == '地点查询' and rendered['bevels'] >= 8, rendered
+                assert rendered.get('material') in ('active', 'suspended'), rendered
+                window.evaluate_js("document.querySelector('#settings-button').click()")
+                assert window.evaluate_js("document.querySelector('#settings-dialog').open")
+                report.update(native_window=True, settings_dialog=True, glass_material=rendered['material'],
+                              glass_bevels=rendered['bevels'], gui=True)
+            except Exception as exc:
+                report['native_error'] = str(exc)
+            finally:
+                window.destroy()
         try:
-            app.update()
-            app.open_settings()
-            app.update()
-            assert app.apply_settings_button.winfo_ismapped()
-            report["gui"] = True
+            # WebView2 deliberately suspends the GPU while its window is hidden.
+            # Show this short-lived probe so the shipped material really renders.
+            run_desktop(native_server, loaded)
         finally:
-            app.close()
+            native_server.server_close()
+            native_app.close()
+        assert report.get('native_window') and not report.get('native_error'), report
     report["passed"] = True
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
