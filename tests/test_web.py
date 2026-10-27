@@ -87,6 +87,12 @@ def test_http_static_token_origin_and_traversal(app):
         status, html = request(server, '/')
         assert status == 200 and app.token.encode() in html and b'__GEOASK_TOKEN__' not in html
         assert request(server, '/app.js')[0] == 200
+        for asset in ('glass.css', 'glass.js', 'vendor/lens/tokens.js',
+                      'vendor/lens/internal/renderer.js', 'vendor/lens/internal/optics.js',
+                      'vendor/lens/internal/context-budget.js', 'vendor/lens/internal/jelly.js',
+                      'vendor/lens/internal/jelly-physics.js'):
+            assert request(server, '/' + asset)[0] == 200
+        assert request(server, '/vendor/lens/../../config.yaml')[0] == 404
         assert request(server, '/../../config.yaml')[0] == 404
         assert request(server, '/api/config', headers={'X-Geoask-Token': ''})[0] == 403
         assert request(server, '/api/config', headers={'X-Geoask-Token': 'é'})[0] == 403
@@ -182,7 +188,8 @@ def test_csv_formula_escape_and_invalidated_result(app):
 
 
 def test_frontend_assets_and_default_online_configuration():
-    for name in ('index.html', 'app.js', 'map.js', 'style.css', 'favicon.svg'):
+    for name in ('index.html', 'app.js', 'map.js', 'style.css', 'glass.css', 'glass.js',
+                 'vendor/lens/internal/renderer.js', 'vendor/lens/LICENSE.txt', 'favicon.svg'):
         assert frontend_file(name).is_file()
     # Read the YAML directly: the legacy test fixture intentionally changes read_settings.
     import yaml

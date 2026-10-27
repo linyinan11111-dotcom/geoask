@@ -20,19 +20,26 @@ const query=async(text,{keepPicker=false}={})=>{
   await page.locator('#query').fill(text);await page.locator('#query-submit').click();await waitReady();
   if(!keepPicker&&await page.locator('#candidates-dialog').isVisible())await page.locator('#candidate-dismiss').click();
 };
-const screenshot=async name=>page.screenshot({path:path.join(root,name),fullPage:true});
+const screenshot=async name=>page.screenshot({path:path.join(root,name),fullPage:true,animations:'disabled'});
 const waitMap=async()=>{
   await page.waitForFunction(()=>{
     const tiles=[...document.querySelectorAll('.tile-layer img')];
     return tiles.length&&tiles.every(img=>img.complete);
   },{},{timeout:20000}).catch(()=>{});
 };
-const markersVisible=async()=>assert(await page.evaluate(()=>{
+const markersVisible=async()=>{
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert(await page.evaluate(()=>{
   const map=document.querySelector('#map').getBoundingClientRect();
+  const intersects=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
+  const panels=[...document.querySelectorAll('.sidebar-scroll,.sidebar-status,.route-card,.brand,.top-actions,.map-controls,.map-legend,.map-title,.map-tip')]
+    .filter(p=>p.getClientRects().length).map(p=>p.getBoundingClientRect()).filter(r=>intersects(map,r));
   return [...document.querySelectorAll('.origin-marker,.stop-marker')].every(m=>{
-    const r=m.getBoundingClientRect();return r.left>=map.left&&r.right<=map.right&&r.top>=map.top&&r.bottom<=map.bottom;
+    const bounds=[m.getBoundingClientRect(),...Array.from(m.querySelectorAll('.marker-label'),l=>l.getBoundingClientRect())];
+    return bounds.every(r=>r.left>=map.left&&r.right<=map.right&&r.top>=map.top&&r.bottom<=map.bottom&&!panels.some(p=>intersects(r,p)));
   });
-}),'selected map markers must be inside the viewport after fitting');
+  }),'selected markers and labels must stay inside the map and clear of floating controls');
+};
 let steps=0;
 try{
   await mkdir(path.join(root,'.cache/web-verification'),{recursive:true});
@@ -51,7 +58,7 @@ try{
     throw new Error('Fixture reset timed out');
   });
   await page.reload();await waitReady();
-  assert.equal(await page.title(),'geoask · 一句话，去想去的地方');
+  assert.equal(await page.title(),'geoask · 地点查询与路线规划');
   const coordinates=await page.evaluate(async()=>{
     const {project,unproject,toGCJ,toWGS}=await import('/map.js');
     return [[116.46,39.92],[-73.9857,40.7484],[179.9,-20]].map(p=>({original:p,mercator:unproject(project(p,15),15),gcj:toWGS(toGCJ(p))}));
@@ -117,6 +124,12 @@ try{
   await page.locator('[data-mode="cycling"]').click();await page.locator('#plan-route').click();await waitReady();
   assert((await page.locator('#status-text').innerText()).includes('路线已规划'));
   await waitMap();await markersVisible();await screenshot('.cache/web-verification/trip-desktop.png');steps++;
+  await page.setViewportSize({width:960,height:680});
+  await page.waitForTimeout(200);await markersVisible();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollHeight>innerHeight),false);
+  await screenshot('.cache/web-verification/trip-compact.png');
+  await page.setViewportSize({width:1440,height:960});
+  await page.waitForTimeout(200);
 
   await page.locator('#parking-enabled').check();await page.locator('#find-parking').click();await waitReady();
   await page.locator('#parking-select').selectOption('1');await page.locator('#plan-route').click();await waitReady();

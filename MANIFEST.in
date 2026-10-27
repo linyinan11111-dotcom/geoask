@@ -7,3 +7,4 @@ recursive-include scripts *.py *.mjs
 recursive-include tests *.py
 recursive-include docs *.md
 recursive-include web *.html *.js *.css *.svg
+recursive-include web/vendor *.txt *.md

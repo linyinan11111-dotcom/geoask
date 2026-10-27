@@ -9,7 +9,7 @@ class BuildWithResources(build_py):
         super().run()
         root = Path(__file__).parent
         assets = [root / "config.yaml", root / "scripts/get_location.ps1",
-                  *sorted((root / "data").glob("*")), *sorted((root / "web").glob("*"))]
+                  *sorted((root / "data").glob("*")), *sorted((root / "web").rglob("*"))]
         for source in assets:
             if source.is_file():
                 destination = Path(self.build_lib) / "geoask_resources" / source.relative_to(root)

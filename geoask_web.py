@@ -337,7 +337,12 @@ class Handler(BaseHTTPRequestHandler):
                                  Content_Disposition='attachment; filename="geoask-trip.csv"')
             except g.GeoaskError as exc:
                 return self.send(409, dict(error=str(exc)))
-        files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/map.js': 'map.js', '/favicon.svg': 'favicon.svg'}
+        files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
+                 '/glass.css': 'glass.css', '/glass.js': 'glass.js',
+                 '/map.js': 'map.js', '/favicon.svg': 'favicon.svg'}
+        for asset in ('tokens.js', 'internal/renderer.js', 'internal/optics.js',
+                      'internal/context-budget.js', 'internal/jelly.js', 'internal/jelly-physics.js'):
+            files['/vendor/lens/' + asset] = 'vendor/lens/' + asset
         name = files.get(parsed.path)
         if not name:
             return self.send(404, dict(error='页面不存在。'))

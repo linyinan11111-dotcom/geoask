@@ -50,9 +50,10 @@ export class TripMap {
     this.tiles = new Map(); this.markers = []; this.line = [];
     this.onOrigin = onOrigin; this.onCandidate = onCandidate; this.onError = onError;
     this.pending = false;
-    new ResizeObserver(() => this.schedule()).observe(element);
+    new ResizeObserver(() => {if(this.fitRequest)this.fit(...this.fitRequest);else this.schedule();}).observe(element);
     element.addEventListener('pointerdown', e => {
       if (e.button !== 0 || e.target.closest('button')) return;
+      this.fitRequest=null;
       this.drag = {start:[e.clientX,e.clientY], center:project(this.mapPoint(this.center),this.zoom)};
       element.setPointerCapture(e.pointerId); element.classList.add('dragging');
     });
@@ -85,6 +86,7 @@ export class TripMap {
       if (e.target !== element) return;
       if (['+','=','-'].includes(e.key)){e.preventDefault();this.changeZoom(e.key==='-'?-1:1);}
       else if(moves[e.key]){
+        this.fitRequest=null;
         e.preventDefault();const p=project(this.mapPoint(this.center),this.zoom), d=moves[e.key];
         this.center=this.fromMap(unproject([p[0]+d[0],p[1]+d[1]],this.zoom));this.schedule();
       }
@@ -103,28 +105,40 @@ export class TripMap {
     return this.fromMap(unproject([c[0]+x-this.el.clientWidth/2,c[1]+y-this.el.clientHeight/2],this.zoom));
   }
   changeZoom(d, anchor=[this.el.clientWidth/2,this.el.clientHeight/2]){
+    this.fitRequest=null;
     const next=clamp(this.zoom+d,3,18); if(next===this.zoom)return;
     const point=this.location(anchor); this.zoom=next;
     const p=project(this.mapPoint(point),this.zoom);
     this.center=this.fromMap(unproject([p[0]-anchor[0]+this.el.clientWidth/2,p[1]-anchor[1]+this.el.clientHeight/2],this.zoom));
     this.schedule();
   }
-  goTo(point, zoom=this.zoom){this.center=[...point];this.zoom=zoom;this.schedule();}
+  goTo(point, zoom=this.zoom){this.fitRequest=null;this.center=[...point];this.zoom=zoom;this.schedule();}
   fit(points, reserveCard=false){
     if(!points.length)return;
-    if(points.length===1){this.goTo(points[0],15);return;}
+    this.fitRequest=[points,reserveCard];
     const pixels=points.map(p=>project(this.mapPoint(p),0));
     const reference=pixels[0][0];
     for(const p of pixels){if(p[0]-reference>128)p[0]-=256;if(p[0]-reference< -128)p[0]+=256;}
     const xs=pixels.map(p=>p[0]),ys=pixels.map(p=>p[1]);
     const min=[Math.min(...xs),Math.min(...ys)],max=[Math.max(...xs),Math.max(...ys)];
     const w=this.el.clientWidth,h=this.el.clientHeight;
-    const right=reserveCard&&w>680?350:40,bottom=reserveCard&&w<=680?310:60;
-    const usableW=Math.max(130,w-right-70),usableH=Math.max(150,h-bottom-90);
+    // Account for the real floating panels, including responsive native windows.
+    const rect=this.el.getBoundingClientRect(),side=document.querySelector('.sidebar').getBoundingClientRect();
+    const overlay=side.left<rect.right&&side.right>rect.left&&side.top<rect.bottom&&side.bottom>rect.top;
+    const card=document.querySelector('.route-card'),cardRect=card.getBoundingClientRect();
+    const showCard=reserveCard&&!card.hidden;
+    const left=overlay?Math.max(60,side.right-rect.left+42):60;
+    const labelReach=Math.max(0,...this.markers.map(marker=>{
+      const label=marker.element.querySelector('.marker-label');
+      return label?label.offsetLeft+label.offsetWidth-marker.element.offsetWidth/2:0;
+    }));
+    const right=(showCard&&overlay?Math.max(60,rect.right-cardRect.left+28):60)+labelReach;
+    const top=overlay?170:125,bottom=showCard&&!overlay?Math.max(60,rect.bottom-cardRect.top+30):85;
+    const usableW=Math.max(50,w-right-left),usableH=Math.max(80,h-bottom-top);
     const scale=Math.min(usableW/Math.max(max[0]-min[0],.00001),usableH/Math.max(max[1]-min[1],.00001));
     this.zoom=clamp(Math.floor(Math.log2(scale)),3,15);
     const center=[(min[0]+max[0])/2,(min[1]+max[1])/2];
-    center[0]+=(right-40)/2/2**this.zoom;center[1]+=(bottom-60)/2/2**this.zoom;
+    center[0]+=(right-left)/2/2**this.zoom;center[1]+=(bottom-top)/2/2**this.zoom;
     this.center=this.fromMap(unproject(center,0));this.schedule();
   }
   setData(markers, line=[]){

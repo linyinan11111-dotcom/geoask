@@ -1,4 +1,5 @@
 import {TripMap} from './map.js';
+import './glass.js';
 
 const $=id=>document.getElementById(id);
 const token=document.querySelector('meta[name="geoask-token"]').content;
@@ -24,7 +25,7 @@ async function api(path,body){
 function busy(value){
   state.busy=value;document.body.classList.toggle('is-busy',value);$('status').classList.toggle('busy',value);
   for(const node of document.querySelectorAll('#query-form button,#query-form input,#query-form textarea,#query-form select,#settings-form button,#settings-form input,#settings-form select,#origin-button,#locate,#settings-button,#origin-form button,#origin-form input,#candidates-list button,.stop-place,.mode-picker button,#parking-enabled,#find-parking,#parking-radius,#parking-select'))node.disabled=value;
-  $('query-submit').firstElementChild.textContent=value?'正在安排这段旅程…':'理解需求，发现地点';
+  $('query-submit').firstElementChild.textContent=value?'正在查询…':'查询地点';
   document.querySelectorAll('.stop-place').forEach((button,i)=>{button.disabled=value||!state.result?.stops[i]?.candidates.length;});
   document.querySelectorAll('.candidate-tab').forEach((button,i)=>{button.disabled=value||!state.result?.stops[i]?.candidates.length;});
   $('review-trip').disabled=value||!state.result?.stops.some(s=>s.candidates.length);
@@ -103,7 +104,7 @@ function visibleRoute(){
 }
 function render(){
   const r=state.result;$('stop-count').textContent=String(r?.stops.length||0).padStart(2,'0');
-  $('welcome-card').hidden=!!r;$('route-card').hidden=!r||r.dry_run;
+  $('route-card').hidden=!r||r.dry_run;
   $('route-stop-count').textContent=`${r?.stops.length||0} 个目的地`;
   if(r){
     $('stops').replaceChildren();
@@ -121,9 +122,8 @@ function render(){
       $('stops').append(block);
     });
   }else{
-    const empty=el('div','empty-trip'),route=el('div','empty-route');
-    ['span','i','span','i','span'].forEach(t=>route.append(el(t)));
-    empty.append(route,el('p','','下一段小旅程，从这里开始'),el('small','','输入需求后，地点会按顺序出现在这里。'));$('stops').replaceChildren(empty);
+    const empty=el('div','empty-trip');
+    empty.append(el('p','','暂无地点'),el('small','','查询后，在弹窗中逐站选择。'));$('stops').replaceChildren(empty);
   }
   renderModes();renderRoute();renderParking();renderMap();updateActions();
 }
@@ -133,7 +133,7 @@ function updateActions(){
   $('plan-route').disabled=state.busy||!ready||!parkingReady;
   $('find-parking').disabled=state.busy||!ready;
   $('export').disabled=state.busy||!r||r.dry_run||!r.stops.some(s=>s.selected_index!=null);
-  $('plan-route').firstElementChild.textContent=visibleRoute()?'重新规划路线':'规划这段旅程';
+  $('plan-route').firstElementChild.textContent=visibleRoute()?'重新规划路线':'规划路线';
 }
 function renderModes(){document.querySelectorAll('[data-mode]').forEach(b=>{const active=b.dataset.mode===state.mode;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);});}
 function renderRoute(){
@@ -142,10 +142,10 @@ function renderRoute(){
     const metrics=$('route-metrics');metrics.replaceChildren();
     const parts=[[r.distance_m>=1000?(r.distance_m/1000).toFixed(2):Math.round(r.distance_m),r.distance_m>=1000?'公里':'米','沿道路距离'],[Math.max(1,Math.round(r.duration_s/60)),'分钟','预计出行时间']];
     parts.forEach(([n,u,l])=>{const group=el('div');group.append(el('strong','',n),el('span','',u),el('small','',l));metrics.append(group);});
-    $('route-heading').textContent='好路线，准备出发';
+    $('route-heading').textContent='路线详情';
     $('route-note').textContent=state.route_parking?'驾车终点为所选停车场；目的地仍保留。':'预计用时不包含停留时间。';
   }else{
-    $('route-heading').textContent='选择你的出发方式';
+    $('route-heading').textContent='路线规划';
     const ready=state.result?.stops.every(s=>s.selected_index!=null);
     $('route-note').textContent=ready?'保留站点顺序，沿真实道路规划。':'请先为每一站选择具体地点。';
   }
@@ -300,7 +300,7 @@ async function start(){
     const snapshot=await api('state');
     if(snapshot.busy){await poll(snapshot.job);}else if(snapshot.state)acceptState(snapshot.state);
     if(state.result){state.center=[...state.result.center];updateOrigin();fitMap();}
-    status(config.has_llm_key&&config.has_amap_key?'准备好就出发。':'先在接口设置中连接语言理解与地图服务。');
+    status(config.has_llm_key&&config.has_amap_key?'等待查询':'请先配置语言模型和地图接口。');
   }catch(error){status(error.message,true);toast(error.message);$('service-badge').textContent='本地服务未连接';}
   finally{busy(false);}
 }
