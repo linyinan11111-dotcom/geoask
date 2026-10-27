@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geoask"
-description = "Natural-language nearby search with local embeddings and DuckDB spatial"
+description = "Natural-language place search and multi-stop route planning with Amap"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

@@ -55,7 +55,8 @@ def result_map_points(result, active_stop):
     return points
 
 
-def validate_settings_form(fields, response_format, map_fields, llm_timeout, routing_timeout):
+def validate_settings_form(fields, response_format, map_fields, llm_timeout, routing_timeout,
+                           routing_provider="valhalla"):
     from urllib.parse import urlsplit
     values = {k: v for k, v in fields.items() if k != "api_key"}
     if any(not value for value in values.values()):
@@ -65,7 +66,8 @@ def validate_settings_form(fields, response_format, map_fields, llm_timeout, rou
         raise ValueError("接口地址需要是有效的 HTTP(S) URL，请勿在 URL 中填写密钥。")
     llm = g.LLMSettings(**values, response_format=response_format, timeout_seconds=llm_timeout)
     maps = g.MapSettings(**{k: v for k, v in map_fields.items() if k != "endpoint"})
-    routing = g.RoutingSettings(endpoint=map_fields["endpoint"], timeout_seconds=routing_timeout)
+    routing = g.RoutingSettings(provider=routing_provider, endpoint=map_fields["endpoint"],
+                                timeout_seconds=routing_timeout)
     return llm, maps, routing, fields["api_key"]
 
 
@@ -429,6 +431,7 @@ class GeoaskApp(tk.Tk):
         self.llm = self.settings.llm.model_copy(deep=True)
         self.routing_settings = self.settings.routing.model_copy(deep=True)
         self.map_settings = self.settings.map.model_copy(deep=True)
+        self.amap_settings = self.settings.amap.model_copy(deep=True)
         self._restore_connection()
         if session_key and previous_llm and credentials.same_connection(previous_llm.model_dump(), self.llm.model_dump()):
             self.api_key.set(session_key)
@@ -465,11 +468,11 @@ class GeoaskApp(tk.Tk):
             if profile is None:
                 return
             llm = g.LLMSettings.model_validate(profile['llm'])
-            maps = g.MapSettings.model_validate(profile['map'])
-            routing = g.RoutingSettings.model_validate(profile['routing'])
             if restore_profile:
-                self.llm, self.map_settings, self.routing_settings = llm, maps, routing
-                self.map_view.configure_map(maps, self.settings.cache_dir / 'tiles')
+                # Map and routing are deployment configuration from the active
+                # YAML. Do not let a stale saved profile (for example an old OSM
+                # tile URL) override the configured Amap basemap on startup.
+                self.llm = llm
             self.api_key.set(credentials.saved_api_key(self.llm.model_dump()))
             self.api_key_is_saved = True
         except (credentials.LocalSettingsError, ValueError):
@@ -556,7 +559,7 @@ class GeoaskApp(tk.Tk):
         dialog = tk.Toplevel(self)
         self.settings_window = dialog
         dialog.title("模型、地图与路线接口")
-        dialog.geometry("630x840")
+        dialog.geometry("630x930")
         dialog.resizable(False, False)
         dialog.configure(bg=WHITE)
         dialog.transient(self)
@@ -593,9 +596,13 @@ class GeoaskApp(tk.Tk):
                 llm, map_settings, routing_settings, key = validate_settings_form(
                     {name: var.get().strip() for name, var in fields.items()}, response_format.get(),
                     {name: var.get().strip() for name, var in map_fields.items()},
-                    self.llm.timeout_seconds, self.routing_settings.timeout_seconds)
+                    self.llm.timeout_seconds, self.routing_settings.timeout_seconds,
+                    self.routing_settings.provider)
                 if self.remember_connection.get():
-                    credentials.save_connection(llm.model_dump(), map_settings.model_dump(), routing_settings.model_dump(), key)
+                    credentials.save_connection(
+                        llm.model_dump(), map_settings.model_dump(), routing_settings.model_dump(), key,
+                        amap_key=amap_fields['amap_key'].get().strip(),
+                        amap_security_code=amap_fields['amap_security_code'].get().strip())
                 else:
                     credentials.clear_connection()
             except (ValueError, credentials.LocalSettingsError) as exc:
@@ -625,6 +632,8 @@ class GeoaskApp(tk.Tk):
                 messagebox.showerror("无法清除", str(exc), parent=dialog)
                 return
             fields['api_key'].set('')
+            amap_fields['amap_key'].set('')
+            amap_fields['amap_security_code'].set('')
             self.api_key.set('')
             self.api_key_is_saved = False
             self.remember_connection.set(False)
@@ -638,11 +647,13 @@ class GeoaskApp(tk.Tk):
 
         self._label(map_panel, "地图与道路路线", size=18, bold=True).pack(anchor="w", pady=(0, 14))
         map_fields = {}
+        route_label = ("Valhalla 路径 API 地址（高德严格模式不使用）"
+                       if self.routing_settings.provider == "amap" else "Valhalla 路径 API 地址")
         for label, name, value in (("底图 XYZ URL（Web Mercator）", "tile_url", self.map_settings.tile_url),
                                     ("底图署名", "attribution", self.map_settings.attribution),
                                     ("User-Agent", "user_agent", self.map_settings.user_agent),
                                     ("底图坐标系（wgs84 / gcj02）", "coordinate_system", self.map_settings.coordinate_system),
-                                    ("Valhalla 路径 API 地址", "endpoint", self.routing_settings.endpoint)):
+                                    (route_label, "endpoint", self.routing_settings.endpoint)):
             self._label(map_panel, label, size=9, bold=True).pack(anchor="w", pady=(12, 5))
             var = tk.StringVar(value=value)
             map_fields[name] = var
@@ -656,6 +667,22 @@ class GeoaskApp(tk.Tk):
                     "点击“获取设备位置”会读取 Windows 定位服务，来源可能是 GPS\n"
                     "或 Wi-Fi。不可用时仍可手动输入 WGS84 经纬度。",
                     size=9, color=MUTED, justify="left", wraplength=490).pack(anchor="w", pady=18)
+        # Amap Web-service credentials: needed for strict Amap POI, routing and parking.
+        try:
+            saved_amap_key, saved_amap_code = credentials.saved_amap_credentials()
+        except credentials.LocalSettingsError:
+            saved_amap_key, saved_amap_code = "", ""
+        amap_fields = {}
+        for label, name, initial in (
+                ("高德 Web 服务 Key（POI/路线，必需）", "amap_key", saved_amap_key),
+                ("高德安全 Code（如控制台启用）", "amap_security_code", saved_amap_code)):
+            self._label(map_panel, label, size=9, bold=True).pack(anchor="w", pady=(12, 5))
+            var = tk.StringVar(value=initial)
+            amap_fields[name] = var
+            ttk.Entry(map_panel, textvariable=var, show="●").pack(fill="x")
+        self._label(map_panel, "严格模式：POI、停车场和路线全部走高德 Web 服务，不回退本地 OSM。\n"
+                    "Key 保存在本机加密凭据文件中，不写入 YAML、地区导出或 Git。",
+                    size=8, color=MUTED, justify="left", wraplength=540).pack(anchor="w", pady=(6, 4))
 
         self._button(map_panel, "应用所有设置", apply, primary=True).pack(fill="x", pady=8)
 
@@ -687,7 +714,8 @@ class GeoaskApp(tk.Tk):
             request = QueryRequest(query, center, radius, limit, self.config_path,
                                    "" if self.api_key_is_saved else self.api_key.get().strip(),
                                    self.llm.model_copy(deep=True), demo,
-                                   self.preview_only.get(), planning=True, demo_trip=demo_trip)
+                                   self.preview_only.get(), planning=True, demo_trip=demo_trip,
+                                   amap=self.settings.amap.primary)
         except ValueError as exc:
             messagebox.showerror("请检查查询条件", str(exc), parent=self)
             return
@@ -763,10 +791,18 @@ class GeoaskApp(tk.Tk):
                         result = engine.reselect(*request, progress=progress)
                         emit("reselected", result)
                     elif kind == "route":
-                        result, mode, routing, parking, parking_index = request
+                        result, mode, routing, amap_settings, parking, parking_index = request
                         progress("正在请求真实道路路线…")
                         points = parking_route_points(parking, parking_index) if parking else route_points(result)
-                        route = plan_road_route(points, "driving" if parking else mode, routing)
+                        if getattr(routing, "provider", "valhalla") == "amap":
+                            from geoask_amap import plan_route as plan_amap_route
+                            amap_key, amap_code = g.resolve_amap_credentials(amap_settings)
+                            if not amap_key:
+                                raise g.GeoaskError("尚未配置高德 Web 服务 Key，无法规划路线。")
+                            route = plan_amap_route(points, "driving" if parking else mode,
+                                                    amap_settings, amap_key, amap_code)
+                        else:
+                            route = plan_road_route(points, "driving" if parking else mode, routing)
                         emit("route", (result, route, parking, parking_index))
                     elif kind == "parking":
                         result, radius = request
@@ -919,6 +955,13 @@ class GeoaskApp(tk.Tk):
                            if stop.resolution == "name-fallback" else
                            f"语义映射：{stop.match.best_candidate}，相似度 {stop.match.similarity:.3f}\n")
                           + f"搜索半径：{result.request.radius:g} 米\n")
+            if result.request.amap:
+                if stop.intent.place_name:
+                    resolution = (f"具体目的地：{stop.intent.place_name}\n"
+                                  "高德地图名称搜索；不受附近查询半径限制\n")
+                else:
+                    resolution = (f"高德地图关键词搜索：{stop.intent.intent}\n"
+                                  f"搜索半径：{result.request.radius:g} 米\n")
             if stop.intent.place_candidates:
                 resolution += "模型提供的名称候选（需本地核对）：" + "、".join(stop.intent.place_candidates) + "\n"
             if stop.candidates and (stop.intent.place_name or stop.resolution == "name-fallback"):
@@ -929,8 +972,10 @@ class GeoaskApp(tk.Tk):
             queries.append(f"-- 第 {i+1} 站\n{stop.sql or stop.blocked_reason}\n"
                            + ("绑定参数：" + json.dumps(stop.params, ensure_ascii=False) if stop.sql else ""))
         self._set_text(self.explanation, f"按顺序理解为：{' → '.join(s.intent.place_name or s.intent.intent for s in result.stops)}\n"
-                       f"自然语言出行方式：{MODE_NAMES[result.travel_mode]}\n当前数据：{self.settings.geojson_path.name}（{result.data_count} 个类别 POI）\n\n"
-                       + "\n\n".join(explanations) + "\n\n" + result.note)
+                       f"自然语言出行方式：{MODE_NAMES[result.travel_mode]}\n"
+                       + ("数据来源：高德地图 Web 服务（严格模式，不回退本地 OSM）" if result.request.amap
+                          else f"当前数据：{self.settings.geojson_path.name}（{result.data_count} 个类别 POI）")
+                       + f"\n\n" + "\n\n".join(explanations) + "\n\n" + result.note)
         self._set_text(self.sql_view, "\n\n".join(queries))
         self.route_summary.set(result.note or "地点已选定，可以规划道路路线。")
         self._render_candidates()
@@ -959,6 +1004,9 @@ class GeoaskApp(tk.Tk):
         self.result_subtitle.configure(text="距前一站 / 起点的直线距离")
         scope = ("名称来自当前数据及配置的地名目录（OSM）；未找到时请补充完整名称或切换区域数据。"
                  if stop.intent.place_name else f"附近类别查询使用当前 POI 文件：{self.settings.geojson_path.name}。")
+        if self.result.request.amap:
+            scope = ("名称来自高德地图在线名称搜索，请确认具体地点。"
+                     if stop.intent.place_name else "附近类别查询使用高德地图在线 POI，严格模式不使用本地 OSM。")
         self.notice.configure(text=(stop.blocked_reason or self.result.note) + "\n" + scope)
 
     def show_candidates(self, index):
@@ -1085,7 +1133,8 @@ class GeoaskApp(tk.Tk):
         self.draw_map()
         self._set_busy(True)
         self.route_summary.set("正在规划驾车到停车场的道路路线…" if parking else f"正在规划{MODE_NAMES[mode]}路线，按你指定的站点顺序行进…")
-        self._queue_job(("route", (self.result, mode, self.routing_settings.model_copy(deep=True), parking, self.parking_index)))
+        self._queue_job(("route", (self.result, mode, self.routing_settings.model_copy(deep=True),
+                                   self.amap_settings.model_copy(deep=True), parking, self.parking_index)))
 
     def mode_changed(self):
         if not self.busy:

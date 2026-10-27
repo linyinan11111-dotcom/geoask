@@ -166,6 +166,24 @@ def test_saved_profile_restores_endpoint_model_and_key_then_clears(app):
     app.settings_window.destroy()
 
 
+def test_saved_profile_does_not_override_map_from_active_config(app):
+    import geoask_credentials as credentials
+    saved_llm = app.llm.model_copy(update={'model': 'saved-model'})
+    stale_map = g.MapSettings(
+        tile_url='https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution='© OpenStreetMap contributors',
+        coordinate_system='wgs84')
+    credentials.save_connection(saved_llm.model_dump(), stale_map.model_dump(),
+                                app.routing_settings.model_dump(), 'saved-key')
+    app._restore_connection(restore_profile=True)
+    assert app.llm.model == 'saved-model'
+    assert app.api_key.get() == 'saved-key'
+    # The active YAML remains authoritative for map/routing settings.
+    assert app.map_settings == app.settings.map
+    assert app.routing_settings == app.settings.routing
+    assert app.map_settings.tile_url == app.settings.map.tile_url
+
+
 def test_save_failure_preserves_dialog_and_session(app, monkeypatch):
     import geoask_credentials as credentials
     previous = app.llm

@@ -1,30 +1,41 @@
 {
-  "verified_at": "2026-10-26T11:45:14.380164+00:00",
-  "version": "0.2.0",
-  "runtime_source_commit": "4530312",
+  "verified_at": "2026-10-27T03:59:40.324919+00:00",
+  "version": "0.2.1",
   "pytest": {
-    "passed": 212,
+    "passed": 225,
+    "skipped": 1,
     "platform": "Windows x64 / Python 3.13",
-    "real_model": true
-  },
-  "github_ci": {
-    "url": "https://github.com/linyinan11111-dotcom/geoask/actions/runs/40316782679",
-    "result": "success",
-    "matrix": [
-      "Windows 3.11",
-      "Windows 3.12",
-      "Windows 3.13",
-      "Ubuntu 3.11",
-      "Ubuntu 3.12",
-      "Ubuntu 3.13"
-    ]
+    "real_model": false
   },
   "desktop_report": "docs/desktop-verification.json",
-  "wheel_smoke": "passed: normal install, resources, credentials, CLI, local compatible HTTP API and GUI initialization",
+  "wheel_smoke": "passed: normal install outside checkout, resources, spatial data, credentials, GUI, CLI and local HTTP API",
+  "archive_source_consistency": true,
+  "code_sha256": {
+    "config.yaml": "90efffc72de1673f1c46c85ee88b6fec2774528b48b83e469f5f94241d8b3d39",
+    "geoask.py": "d5a91bc4f7ed627f8674a6d95cbe04f4985d00ecd9eb7986ca52b8dfc5e5d91c",
+    "geoask_amap.py": "958fcc280d6feebcfb91540cd02f9b6084c464a103e166496678cc614fb5b4dc",
+    "geoask_credentials.py": "d28204ba0497043eabcc27785b89ab8a1438a1f39bb91483b45e188dbe0abb41",
+    "geoask_data.py": "aa879b1667355015e949b076fba671d8bb42826b103a60779451576c1d14fb50",
+    "geoask_gui.py": "d4d73d0c7f10ff18f21544560bb7d7bc51732a416af4aab0e84a7d13c6d8227d",
+    "geoask_location.py": "6daf604c4aa5bf294d2537206ed8a23a0f6556f76157c8dcd543b63acecfb4f3",
+    "geoask_map.py": "19652ecff8e966cc29a1b20a3cb6992b1437258345ded975add05c371427b8e3",
+    "geoask_parking.py": "2b1555f930c1fdd0dcaa746dd327f29e68a780f7c120e316aaedea8db5c6f394",
+    "geoask_places.py": "5a3cc2fc557c453e0b0b6d5cf4a3e135237b97299009ab9387be836ae0c680ce",
+    "geoask_resources/__init__.py": "195e4981c78d0715e0b06fee597e2ea9bb9c49e011d4286bd143c2dbc71fa781",
+    "geoask_routing.py": "29713a5c3f12ce69f4fe2cbfb9ca456ef76d9f2f0ca39e69ad38b3df6971e150",
+    "geoask_runtime.py": "bb87ef8e45540a82170d65c7024af9bedd2e2036cc47b9a3b443f169d6ebe287",
+    "geoask_service.py": "87d007b7173eabc8a511eec6104f5e69a96c2c33fd27b1c4d9e1ce38117854ac",
+    "pyproject.toml": "e066dcf9279515b29e7dce7825580fa7fda7d21547ea4ba3bfddc71afab9a378",
+    "README.md": "d3475f7b26341dbfdf5f5611596982811a65370ab6f62880c0e863d343b8df0b",
+    "scripts/build_desktop.py": "f411290c0aa52a01a3403b2f18c4955b7b6c01f4a227c4399c81ffebe951251a",
+    "scripts/desktop_entry.py": "01f64b78dd849c5bcf7fb256128f177e28e294cc9e8706d42a7cb08ccafedade",
+    "scripts/verify_desktop.py": "36bf153cea7af41593b52d59b8f687edab1d18426ab2bbd302a88f5cf8495d70",
+    "scripts/verify_wheel.py": "f8bf6395cde6c68778799894e4d85b635e31927a72b1f3ad7f005d14830a971f"
+  },
   "limitations": [
-    "Desktop tested on this Windows x64 host; not every Windows device",
-    "Embedding loaded from existing model cache; first download not repeated",
-    "No paid DeepSeek API or successful hardware GPS validation",
-    "Prior GUI/reliability JSON files are historical snapshots; consult their code hashes"
+    "Desktop tested on this Windows x64 host",
+    "No paid LLM calls; live Amap POI and routing not exercised by package smoke checks",
+    "Real embedding model test skipped; production Amap mode does not load it",
+    "Other GUI/trip/reliability reports are historical snapshots; check their source hashes"
   ]
 }

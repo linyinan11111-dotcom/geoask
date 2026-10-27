@@ -74,9 +74,12 @@ class MapSettings(BaseModel):
 
 
 class AmapSettings(BaseModel):
-    """Optional Gaode (Amap) POI fallback; the Web service key stays external."""
+    """Gaode (Amap) Web services; the Web service key stays outside YAML."""
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
+    # When primary is true the app uses Amap for POI, routing and parking and
+    # never falls back to the local OSM dataset.
+    primary: bool = False
     endpoint: str = "https://restapi.amap.com/v5/place/text"
     api_key_env: str = "AMAP_WEB_KEY"
     security_code_env: str = "AMAP_SECURITY_CODE"
@@ -109,6 +112,7 @@ class AmapSettings(BaseModel):
 
 class RoutingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    provider: Literal["valhalla", "amap"] = "valhalla"
     endpoint: str = "https://valhalla1.openstreetmap.de/route"
     timeout_seconds: float = Field(default=20, gt=0, le=90)
 
@@ -668,6 +672,44 @@ def near_callback(ctx, param, value):
         raise click.BadParameter("请使用有效的 WGS84 经度,纬度，例如 116.46,39.92。") from exc
 
 
+def _cli_amap(intent, center, radius, limit, settings, dry_run, explain):
+    """Strict Amap Web-service query for the CLI (no local OSM fallback)."""
+    from geoask_amap import search_pois
+    query = intent.place_name or intent.intent
+    search_radius = 50000 if intent.place_name else radius
+    description = (f"高德 place/text: keywords={query}, location={center[0]:.7f},{center[1]:.7f}, "
+                   f"radius={search_radius:g}, limit={limit}")
+    if explain or dry_run:
+        click.echo("数据源: 高德地图（Web 服务，严格模式）")
+        click.echo(f"意图词: {intent.intent}")
+        if intent.place_name:
+            click.echo(f"具体目的地: {intent.place_name}")
+        if intent.modifiers:
+            click.echo("提示: 高德数据无法验证描述条件: " + "、".join(intent.modifiers))
+    if dry_run:
+        click.echo("高德查询（未执行；不输出 Key）:\n" + description)
+        return
+    try:
+        key, security_code = resolve_amap_credentials(settings.amap)
+    except LocalSettingsError as exc:
+        raise GeoaskError("无法读取本机保存的高德凭据，请重新保存接口设置。") from exc
+    if not key:
+        raise GeoaskError("尚未配置高德 Web 服务 Key；请在环境变量 AMAP_WEB_KEY 或接口设置中保存。")
+    results = search_pois(query, center, search_radius, limit, settings.amap, key,
+                          security_code, strict=True)
+    click.echo(f"结果 ({len(results)} 条):")
+    for i, row in enumerate(results, 1):
+        click.echo(f"  {i}. {row['name']}  [{row['category']}]  {row['dist_m']:.0f}m")
+    if not results:
+        raise GeoaskError(f"高德地图未找到“{query}”，请换一个名称、关键词或增大查询半径。")
+    if intent.place_name:
+        total = int(results[0].get("name_match_count") or len(results))
+        if total > 1:
+            click.echo(f"存在 {total} 个高德名称候选，请补充完整名称或在 GUI 选择具体地点。")
+        elif results[0].get("name_rank", 0) > 0:
+            click.echo("以上为待确认的高德名称候选，请核对地点或在 GUI 选择后规划路线。")
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("query")
 @click.option("--config", "config_path", type=click.Path(path_type=Path, dir_okay=False),
@@ -688,6 +730,9 @@ def cli(query, config_path, near, radius, limit, dry_run, explain):
         build_query("validation", center, radius, limit)
         intent = parse_intent(query, settings.llm)
         validate_resolved_intent(intent, query)
+        if settings.amap.primary:
+            _cli_amap(intent, center, radius, limit, settings, dry_run, explain)
+            return
         con = load_data(settings)
         if intent.place_name:
             from geoask_places import build_place_query, search_place_with_variants

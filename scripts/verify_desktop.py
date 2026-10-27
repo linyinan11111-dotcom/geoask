@@ -8,8 +8,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 import zipfile
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from geoask_resources import __version__
 
 
 def main():
@@ -18,6 +21,8 @@ def main():
     parser.add_argument('--model-cache', type=Path)
     args = parser.parse_args()
     archive = args.archive.resolve()
+    if archive.name != f'geoask-{__version__}-windows-x64.zip':
+        raise ValueError(f'Expected a desktop archive for version {__version__}')
     with tempfile.TemporaryDirectory(prefix='geoask-release-') as folder:
         directory = Path(folder) / '解压测试'
         directory.mkdir()
@@ -41,7 +46,12 @@ def main():
         process = subprocess.run(command, cwd=directory, env=env, timeout=240,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
         report = json.loads(report_path.read_text(encoding='utf-8')) if report_path.is_file() else {}
+        report['passed'] = bool(report.get('passed') and process.returncode == 0
+                                and report.get('version') == __version__
+                                and report.get('frozen') is True)
         report.update(verified_at=datetime.now(timezone.utc).isoformat(),
+                      expected_version=__version__,
+                      executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
                       archive=archive.name, archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
                       returncode=process.returncode, isolated_user_storage=True, outside_checkout=True,
                       embedding_source='existing local cache' if args.model_cache else 'not exercised',

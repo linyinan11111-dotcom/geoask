@@ -67,6 +67,10 @@ with g.load_data(settings) as con:
     assert con.execute('SELECT count(*) FROM poi').fetchone()[0] == manifest['rows']
 config = json.loads(settings.model_dump_json())
 config['llm']['base_url'] = __import__('sys').argv[1]
+# Exercise bundled local resources without contacting the production Amap API.
+config['amap']['primary'] = False
+config['amap']['enabled'] = False
+config['routing']['provider'] = 'valhalla'
 Path('installed-config.yaml').write_text(__import__('yaml').safe_dump(config), encoding='utf-8')
 if os.name == 'nt' or os.getenv('DISPLAY'):
     app = geoask_gui.GeoaskApp()

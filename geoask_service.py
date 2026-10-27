@@ -21,6 +21,49 @@ def _amap_search(query, center, radius, limit, settings):
                          api_key, security_code=security_code)
 
 
+def _amap_credentials(settings):
+    """Resolve strict Amap Web-service credentials; never fall back to OSM."""
+    if not settings.amap.enabled:
+        raise g.GeoaskError("高德数据源未启用，请在配置中设置 amap.enabled: true。")
+    key, security_code = g.resolve_amap_credentials(settings.amap)
+    if not key:
+        raise g.GeoaskError("尚未配置高德 Web 服务 Key。请保存 AMAP_WEB_KEY 或在接口设置中填写高德 Key。")
+    return key, security_code
+
+
+def _amap_name_rank(query, name):
+    from geoask_places import name_key
+    key = name_key(query)
+    candidate = name_key(name)
+    if not key or not candidate:
+        return 1
+    if key == candidate:
+        return 0
+    if key in candidate or candidate in key:
+        return 2
+    return 1
+
+
+def _amap_categories(stops):
+    seen = []
+    for stop in stops:
+        for row in stop.candidates:
+            category = str(row.get("category") or "")
+            if category and category not in seen:
+                seen.append(category)
+    return seen
+
+
+def _amap_data_count(stops):
+    for stop in stops:
+        if stop.candidates:
+            try:
+                return int(stop.candidates[0].get("name_match_count") or len(stop.candidates))
+            except (TypeError, ValueError):
+                return len(stop.candidates)
+    return 0
+
+
 @dataclass(frozen=True)
 class QueryRequest:
     query: str
@@ -34,6 +77,9 @@ class QueryRequest:
     dry_run: bool = False
     planning: bool = False
     demo_trip: bool = False
+    # True means strict Amap Web services for POI, parking and routing; the
+    # local OSM dataset is not used at all.
+    amap: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +115,8 @@ class QueryResult:
     @property
     def note(self) -> str:
         notes = []
+        if self.request.amap:
+            notes.append("数据来源：高德地图在线服务；坐标已转换为 WGS84 后展示和计算距离。")
         if self.request.demo:
             notes.append("示例体验：意图使用固定测试桩，嵌入映射和地点查询真实执行。")
         if self.stops:
@@ -154,6 +202,8 @@ class QueryEngine:
             raise g.GeoaskError("请输入 1–4000 个字符的查询。")
         g.build_query("validation", request.center, request.radius, request.limit)
         settings = g.read_settings(request.config_path)
+        if request.amap or settings.amap.primary:
+            return self._run_amap(request, settings, progress)
         if request.planning:
             return self._run_plan(request, settings, progress)
         llm = request.llm or settings.llm
@@ -193,6 +243,97 @@ class QueryEngine:
             return QueryResult(request, intent, stop.match, list(self.categories), stop.candidates,
                                stop.sql, stop.params, self.data_count, [stop])
         return QueryResult(request, intent, match, list(self.categories), rows, sql, params, self.data_count)
+
+    def _parse_amap_intents(self, request, settings, progress, key, code):
+        llm = request.llm or settings.llm
+        if request.planning:
+            progress("正在理解行程顺序与出行方式…")
+            if request.demo:
+                intents = [g.GeoIntent(intent="咖啡", modifiers=[])]
+                if request.demo_trip:
+                    intents.append(g.GeoIntent(intent="健身", modifiers=[]))
+                plan = g.GeoPlan(stops=intents, travel_mode="walking")
+            elif request.api_key:
+                with g.OpenAI(api_key=request.api_key, base_url=llm.base_url,
+                              timeout=llm.timeout_seconds, max_retries=1) as client:
+                    plan = g.parse_plan(request.query, llm, client)
+            else:
+                plan = g.parse_plan(request.query, llm)
+            for intent in plan.stops:
+                g.validate_resolved_intent(intent, request.query if len(plan.stops) == 1 else "")
+            return list(plan.stops), plan.travel_mode
+        progress("正在理解你的需求…")
+        if request.demo:
+            intent = g.GeoIntent(intent="咖啡", modifiers=[])
+        elif request.api_key:
+            with g.OpenAI(api_key=request.api_key, base_url=llm.base_url,
+                          timeout=llm.timeout_seconds, max_retries=1) as client:
+                intent = g.parse_intent(request.query, llm, client)
+        else:
+            intent = g.parse_intent(request.query, llm)
+        g.validate_resolved_intent(intent, request.query)
+        return [intent], "walking"
+
+    def _run_amap(self, request, settings, progress):
+        key, security_code = _amap_credentials(settings)
+        intents, travel_mode = self._parse_amap_intents(request, settings, progress, key, security_code)
+        stops = self._amap_choose_stops(intents, request, settings, progress, key, security_code)
+        first = stops[0]
+        if not request.dry_run and not first.candidates:
+            raise g.GeoaskError(first.blocked_reason or "高德地图没有找到匹配地点。")
+        return QueryResult(request, first.intent, first.match, _amap_categories(stops),
+                           first.candidates, first.sql, first.params, _amap_data_count(stops),
+                           stops, travel_mode)
+
+    def _amap_choose_stops(self, intents, request, settings, progress, key, security_code, prefix=None):
+        stops = list(prefix or [])
+        center = request.center
+        if stops:
+            previous = stops[-1].selected
+            center = (previous["longitude"], previous["latitude"]) if previous else None
+        for intent in intents:
+            progress(f"正在为第 {len(stops) + 1} 站“{intent.place_name or intent.intent}”查找高德地点…")
+            if center is None:
+                stops.append(PlannedStop(intent, g.CategoryMatch(None, "无中心", 0, 0), [], None,
+                                         blocked_reason="请先为前一站选定地点，再查找这一站。",
+                                         resolution="amap"))
+                continue
+            stop = self._amap_stop(intent, center, request, settings, key, security_code)
+            stops.append(stop)
+            center = (stop.selected["longitude"], stop.selected["latitude"]) if stop.selected else None
+        return stops
+
+    def _amap_stop(self, intent, center, request, settings, key, security_code):
+        query = intent.place_name or intent.intent
+        # A named destination must be found beyond the nearby radius; keywords
+        # search uses Amap's maximum useful radius.  Category queries keep the
+        # user's radius.
+        radius = 50000 if intent.place_name else request.radius
+        resolution = "amap-name" if intent.place_name else "amap-category"
+        sql = (f"高德 place/text: keywords={query}, location={center[0]:.7f},{center[1]:.7f}, "
+               f"radius={radius:g}, limit={request.limit}")
+        if request.dry_run:
+            return PlannedStop(intent, g.CategoryMatch(None, query, 0, 0), [], center, sql, [],
+                               None, "预览：未执行高德查询。", resolution)
+        from geoask_amap import search_pois
+        rows = search_pois(query, center, radius, request.limit, settings.amap, key,
+                           security_code, strict=True)
+        for row in rows:
+            row["name_rank"] = _amap_name_rank(query, row["name"]) if intent.place_name else 0
+        selected, reason = None, ""
+        if not rows:
+            reason = f"高德地图未找到“{query}”，请换一个名称、关键词或增大查询半径。"
+        elif intent.place_name:
+            total = int(rows[0].get("name_match_count") or len(rows))
+            if total > 1 or rows[0]["name_rank"] > 0:
+                reason = f"高德地图找到 {total} 个名称候选，请选择具体地点后规划路线。"
+            else:
+                selected = 0
+        else:
+            selected = 0
+        match = g.CategoryMatch(rows[0].get("category") if rows else None, query,
+                                1.0 if rows else 0.0, 2.0 if rows else 0.0)
+        return PlannedStop(intent, match, rows, center, sql, [], selected, reason, resolution)
 
     def _name_fallback_stop(self, intent, category_match, request, progress, settings, center=None):
         """Use a low-confidence intent as a name search instead of guessing a category."""
@@ -296,6 +437,15 @@ class QueryEngine:
         if not 0 <= candidate_index < len(stop.candidates):
             raise g.GeoaskError("请选择有效的候选地点。")
         settings = g.read_settings(result.request.config_path)
+        if result.request.amap or settings.amap.primary:
+            key, security_code = _amap_credentials(settings)
+            prefix = [*result.stops[:stop_index], replace(stop, selected_index=candidate_index, blocked_reason="")]
+            remaining = [s.intent for s in result.stops[stop_index+1:]]
+            stops = self._amap_choose_stops(remaining, result.request, settings, progress,
+                                            key, security_code, prefix)
+            first = stops[0]
+            return replace(result, stops=stops, intent=first.intent, match=first.match,
+                           rows=first.candidates, sql=first.sql, params=first.params)
         self._prepare(settings, progress, need_mapper=any(g.needs_mapper(s.intent) for s in result.stops))
         prefix = [*result.stops[:stop_index], replace(stop, selected_index=candidate_index, blocked_reason="")]
         remaining = [s.intent for s in result.stops[stop_index+1:]]
@@ -305,9 +455,28 @@ class QueryEngine:
                        rows=first.candidates, sql=first.sql, params=first.params)
 
     def find_parking(self, result, radius, progress=lambda _: None):
+        settings = g.read_settings(result.request.config_path)
+        if result.request.amap or settings.amap.primary:
+            from geoask_amap import search_pois
+            from geoask_parking import ParkingOptions
+            if not 0 < radius <= 5000:
+                raise g.GeoaskError("停车搜索半径必须在 0–5000 米之间。")
+            route_points(result)
+            key, security_code = _amap_credentials(settings)
+            progress("正在查找最后一站附近的高德停车场…")
+            destination = result.stops[-1].selected
+            center = (destination["longitude"], destination["latitude"])
+            rows = search_pois("停车场", center, radius, result.request.limit,
+                               settings.amap, key, security_code, strict=True)
+            total = 0
+            if rows:
+                try:
+                    total = int(rows[0].get("name_match_count") or len(rows))
+                except (TypeError, ValueError):
+                    total = len(rows)
+            return ParkingOptions(result, radius, rows, total)
         from geoask_parking import find_parking
         route_points(result)
-        settings = g.read_settings(result.request.config_path)
         self._prepare(settings, progress, need_mapper=False)
         progress("正在查找最后一站附近的停车场…")
         return find_parking(self.con, result, radius, settings)
