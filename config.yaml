@@ -1,28 +1,7 @@
 # 路径相对于本配置文件，不依赖运行命令时的目录。
-geojson_path: data/beijing_poi.gpkg
-layer: poi
-field_mapping:
-  name: name
-  category: fclass
-  geometry: geom
-source_crs: EPSG:4326
 default_location: [116.46, 39.92]  # 北京国贸周边，WGS84 经度、纬度
 default_radius: 1000
 limit: 10
-
-# 英文单语 bge-small-en 不能可靠完成中文 -> 英文的类别映射。
-embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-category_similarity_threshold: 0.60
-category_margin_threshold: 0.03
-cache_dir: .cache
-
-# 指定目的地按名称检索整个北京地名目录，不受“附近类别”的半径限制。
-# 自定义数据可设为 null；别名应按该区域核实，不由 LLM 生成坐标。
-place_catalog_path: data/beijing_places.gpkg
-# 改用其他 POI 文件时，自动停用这份北京补充目录及其别名，避免跨地区混用。
-place_catalog_for: data/beijing_poi.gpkg
-place_aliases:
-  鸟巢: 国家体育场
 
 # 高德 GCJ-02 / Web Mercator 底图；可换成其他兼容 XYZ 瓦片服务。
 map:
@@ -31,7 +10,7 @@ map:
   user_agent: geoask/0.2 (local desktop nearby search)
   coordinate_system: gcj02
 
-# 高德 POI/路线在线数据源。primary 为 true 时严格使用高德，不回退本地 OSM。
+# 地点、停车场与路线只使用高德 Web 服务，不读取本地 OSM 数据。
 amap:
   enabled: true
   primary: true
@@ -39,20 +18,12 @@ amap:
   api_key_env: AMAP_WEB_KEY
   security_code_env: AMAP_SECURITY_CODE
   timeout_seconds: 12
-  # region: 北京
 
-# 高德路线（provider: amap）；显式改回 valhalla 可调试旧路径。
 routing:
   provider: amap
-  endpoint: https://valhalla1.openstreetmap.de/route
   timeout_seconds: 20
 
-# 可选停车导航：仅使用当前地区数据中这些类别的地点，不调用 LLM 猜测停车场。
-parking:
-  categories: [parking, parking_underground, parking_multistorey, 停车场]
-  radius: 1000
-
-# LLM 接口：只解析意图。密钥可在 GUI 保存到本机或用环境变量，勿写入本文件。
+# LLM 接口：只解析意图。密钥可在界面保存到本机或用环境变量，勿写入本文件。
 llm:
   base_url: https://api.deepseek.com
   model: deepseek-chat

@@ -191,10 +191,8 @@ def test_frontend_assets_and_default_online_configuration():
     for name in ('index.html', 'app.js', 'map.js', 'style.css', 'glass.css', 'glass.js',
                  'vendor/lens/internal/renderer.js', 'vendor/lens/LICENSE.txt', 'favicon.svg'):
         assert frontend_file(name).is_file()
-    # Read the YAML directly: the legacy test fixture intentionally changes read_settings.
-    import yaml
-    config = yaml.safe_load(g.DEFAULT_CONFIG.read_text(encoding='utf-8'))
-    assert config['amap']['primary'] and config['routing']['provider'] == 'amap'
+    settings = g.read_settings(g.DEFAULT_CONFIG)
+    assert settings.amap.primary and settings.routing.provider == 'amap'
 
 
 def test_native_shell_uses_desktop_window_and_stops_server(app, monkeypatch):

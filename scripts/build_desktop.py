@@ -17,7 +17,6 @@ sys.path.insert(0, str(ROOT))
 
 def main():
     from geoask_resources import __version__
-    import geoask as g
     if sys.platform != "win32" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise SystemExit("Build this package using Windows x64 Python.")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -27,13 +26,6 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     work = ROOT / 'build' / 'desktop'
     work.mkdir(parents=True, exist_ok=True)
-    # DuckDB checks the extension signature/version again when the binary loads it.
-    with g.connect_spatial() as con:
-        version = con.execute('SELECT version()').fetchone()[0]
-        target = con.execute('PRAGMA platform').fetchone()[0]
-    extension = Path.home() / '.duckdb' / 'extensions' / version / target / 'spatial.duckdb_extension'
-    if not extension.is_file():
-        raise SystemExit(f'Cannot locate installed spatial extension: {extension}')
     assets = work / 'resources'
     assets.mkdir(exist_ok=True)
     licenses = assets / 'THIRD_PARTY_LICENSES'
@@ -55,15 +47,10 @@ def main():
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--windowed',
                '--name', 'geoask', '--distpath', str(output / 'desktop'), '--workpath', str(work / 'pyinstaller'),
                '--specpath', str(work), '--paths', str(ROOT),
-               '--copy-metadata', 'fastembed', '--copy-metadata', 'onnxruntime',
-               '--collect-all', 'onnxruntime', '--collect-all', 'tokenizers',
-               '--collect-submodules', 'fastembed',
                '--collect-all', 'webview',
                '--add-data', f'{ROOT / "config.yaml"};geoask_resources',
-               '--add-data', f'{ROOT / "data"};geoask_resources/data',
                '--add-data', f'{ROOT / "web"};geoask_resources/web',
-               '--add-data', f'{ROOT / "scripts/get_location.ps1"};geoask_resources/scripts',
-               '--add-binary', f'{extension};geoask_resources']
+               '--add-data', f'{ROOT / "scripts/get_location.ps1"};geoask_resources/scripts']
     for name in ['torch', 'tensorflow', 'transformers', 'pandas', 'scipy', 'matplotlib', 'IPython', 'pytest']:
         command += ['--exclude-module', name]
     command.append(str(ROOT / 'scripts/desktop_entry.py'))

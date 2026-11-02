@@ -1,12 +1,8 @@
-"""No paid API calls. Integration tests use the real model only when requested."""
+"""Intent parsing, configuration and the Amap CLI. No paid API calls."""
 import json
-import math
-import os
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 from click.testing import CliRunner
 
@@ -60,106 +56,34 @@ def test_missing_key_has_actionable_message(monkeypatch):
         g.parse_intent("咖啡", g.LLMSettings())
 
 
-class ToyEmbedder:
-    def __init__(self):
-        self.calls = []
-
-    def embed(self, texts):
-        self.calls.append(texts)
-        values = {"cafe": [1, 0, 0], "咖啡": [1, .1, 0], "park": [0, 1, 0],
-                  "火锅": [0, 0, 1], "ambiguous": [1, 1, 0]}
-        return [np.array(values[t], dtype=np.float32) for t in texts]
+def test_shipped_config_is_amap_only():
+    settings = g.read_settings(g.DEFAULT_CONFIG)
+    assert settings.amap.enabled and settings.amap.primary
+    assert settings.routing.provider == "amap"
+    assert settings.default_location == (116.46, 39.92)
 
 
-def test_semantic_match_rejection_cache_and_invalidation(tmp_path):
-    settings = g.Settings(embedding_model="test", cache_dir=tmp_path)
-    embedder = ToyEmbedder()
-    mapper = g.SemanticMapper(["park", "cafe"], settings, embedder)
-    assert mapper.match("咖啡").category == "cafe"
-    assert mapper.match("火锅").category is None
-    assert mapper.match("ambiguous").category is None
-    second = ToyEmbedder()
-    g.SemanticMapper(["cafe", "park"], settings, second)
-    assert second.calls == []  # Category vectors reused across processes.
-    g.SemanticMapper(["cafe"], settings, second)
-    assert second.calls == [["cafe"]]  # New dataset vocabulary invalidates cache.
-    for path in tmp_path.glob('*.npy'):
-        path.write_bytes(b'corrupt')
-    recovered = ToyEmbedder()
-    g.SemanticMapper(["cafe", "park"], settings, recovered)
-    assert recovered.calls == [["cafe", "park"]]
+def test_legacy_local_keys_are_ignored_when_amap_stays_primary(tmp_path):
+    path = tmp_path / "old.yaml"
+    path.write_text("""
+amap: {enabled: true, primary: true}
+routing: {provider: amap, endpoint: https://valhalla1.openstreetmap.de/route}
+geojson_path: data/beijing_poi.gpkg
+embedding_model: sentence-transformers/example
+place_catalog_path: data/beijing_places.gpkg
+parking: {categories: [parking], radius: 800}
+""", encoding="utf-8")
+    settings = g.read_settings(path)
+    assert settings.amap.primary and settings.routing.provider == "amap"
+    assert not hasattr(settings, "geojson_path")
+    assert "endpoint" not in settings.routing.model_dump()
 
 
-@pytest.fixture
-def con():
-    conn = g.connect_spatial()
-    conn.execute("CREATE TABLE poi (name VARCHAR, category VARCHAR, geometry GEOMETRY)")
-    rows = [("at center", "cafe", 116.46, 39.92),
-            ("north", "cafe", 116.46, 39.925),
-            ("east", "cafe", 116.47, 39.92),
-            ("corner outside circle", "cafe", 116.47, 39.928),
-            ("far", "cafe", 116.56, 39.92),
-            ("other type", "park", 116.46, 39.92)]
-    for name, category, lon, lat in rows:
-        conn.execute("INSERT INTO poi VALUES (?, ?, ST_Point(?, ?))", [name, category, lon, lat])
-    conn.execute("CREATE INDEX poi_geom_idx ON poi USING RTREE(geometry)")
-    yield conn
-    conn.close()
-
-
-def test_meter_filter_sort_and_coordinate_order(con):
-    rows = g.search(con, "cafe", (116.46, 39.92), 1000)
-    assert [r["name"] for r in rows] == ["at center", "north", "east"]
-    assert 554 < rows[1]["dist_m"] < 556
-    assert 854 < rows[2]["dist_m"] < 857
-    assert all(math.isfinite(r["dist_m"]) and r["dist_m"] <= 1000 for r in rows)
-    assert g.search(con, "cafe", (116.46, 39.92), 1) == [rows[0]]
-    assert len(g.search(con, "cafe", (116.46, 39.92), 1000, limit=2)) == 2
-    with pytest.raises(g.GeoaskError):
-        g.search(con, "nonexistent", (116.46, 39.92), 1000)
-
-
-def test_index_scan_in_actual_parameterized_plan(con):
-    sql, params = g.build_query("cafe", (116.46, 39.92), 1000)
-    plan = con.execute("EXPLAIN " + sql, params).fetchall()
-    assert "RTREE_INDEX_SCAN" in str(plan)
-
-
-@pytest.mark.parametrize("center,other", [
-    ((179.999, 0), (-179.999, 0)), ((-179.999, 0), (179.999, 0)),
-    ((15, 89.999), (-165, 89.999)), ((15, -89.999), (-165, -89.999)),
-])
-def test_date_line_and_polar_caps(con, center, other):
-    con.execute("DELETE FROM poi")
-    con.execute("INSERT INTO poi VALUES ('across', 'cafe', ST_Point(?,?))", list(other))
-    rows = g.search(con, "cafe", center, 500)
-    assert len(rows) == 1 and 200 < rows[0]["dist_m"] < 250
-
-
-def test_sql_injection_is_only_a_bound_value(con):
-    attack = "cafe'); DROP TABLE poi; --"
-    sql, params = g.build_query(attack, (116.46, 39.92), 1000)
-    assert attack not in sql
-    assert attack in params
-    assert con.execute(sql, params).fetchall() == []
-    assert con.execute("SELECT count(*) FROM poi").fetchone()[0] == 6
-
-
-def test_dry_run_never_executes_search(monkeypatch, con, tmp_path):
-    attack = "我想喝咖啡'; DROP TABLE poi; --"
-    monkeypatch.setattr(g, "parse_intent", lambda *args: g.GeoIntent(intent="咖啡", modifiers=["安静"]))
-    monkeypatch.setattr(g, "load_data", lambda *args: con)
-    monkeypatch.setattr(g, "SemanticMapper", lambda *args: SimpleNamespace(
-        match=lambda word: g.CategoryMatch("cafe", "cafe", .9, .3)))
-    def forbidden(*args):
-        pytest.fail("dry-run executed search")
-    monkeypatch.setattr(g, "search", forbidden)
-    result = CliRunner().invoke(g.cli, [attack, "--dry-run", "--near", "116.46,39.92"])
-    assert result.exit_code == 0, result.output
-    assert "SQL" in result.output and "绑定参数" in result.output
-    assert "未应用: 安静" in result.output
-    assert "WHERE dist_m <= ?" in result.output
-    assert attack not in result.output and "DROP TABLE" not in result.output
+def test_disabled_amap_config_is_rejected(tmp_path):
+    path = tmp_path / "local.yaml"
+    path.write_text("amap: {enabled: true, primary: false}\n", encoding="utf-8")
+    with pytest.raises(g.GeoaskError, match="高德"):
+        g.read_settings(path)
 
 
 @pytest.mark.parametrize("args", [
@@ -171,44 +95,30 @@ def test_cli_rejects_invalid_arguments(args):
     assert result.exit_code == 2
 
 
-def test_config_relative_paths_and_quoted_field_mapping(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text('geojson_path: fixture.geojson\nlayer: null\nfield_mapping:\n  name: weird\"name\n  category: kind\n  geometry: geom\n', encoding="utf-8")
-    data = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {
-        'weird"name': "Cafe", "kind": "cafe"}, "geometry": {"type": "Point", "coordinates": [116.46, 39.92]}}]}
-    (tmp_path / "fixture.geojson").write_text(json.dumps(data), encoding="utf-8")
-    settings = g.read_settings(path)
-    assert settings.geojson_path == tmp_path / "fixture.geojson"
-    conn = g.load_data(settings)
-    try:
-        assert g.search(conn, "cafe", (116.46, 39.92), 10)[0]["name"] == "Cafe"
-    finally:
-        conn.close()
+def test_cli_dry_run_prints_amap_query_without_search(monkeypatch):
+    monkeypatch.setattr(g, "parse_intent", lambda *args, **kwargs: g.GeoIntent(intent="洗浴中心", modifiers=[]))
+    called = False
+
+    def search(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("dry-run must not call Amap")
+
+    monkeypatch.setattr("geoask_amap.search_pois", search)
+    result = CliRunner().invoke(g.cli, ["洗浴中心", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "高德 place/text" in result.output
+    assert not called
 
 
-def test_bundled_real_data():
-    settings = g.read_settings(g.ROOT / "config.yaml")
-    conn = g.load_data(settings)
-    try:
-        count = conn.execute("SELECT count(*) FROM poi").fetchone()[0]
-        assert 200 <= count <= 500
-        categories = {row[0] for row in conn.execute("SELECT DISTINCT category FROM poi").fetchall()}
-        assert categories == {"cafe", "restaurant", "park", "railway_station", "supermarket", "fitness_centre"}
-        rows = g.search(conn, "cafe", settings.default_location, 1000)
-        assert rows and all(0 <= row["dist_m"] <= 1000 for row in rows)
-        assert [r['dist_m'] for r in rows] == sorted(r['dist_m'] for r in rows)
-    finally:
-        conn.close()
+@pytest.mark.parametrize("word", ["unknown", "未知", "不明确"])
+def test_cli_rejected_intent_has_nonzero_exit(monkeypatch, word):
+    monkeypatch.setattr(g, "parse_intent", lambda *a, **kw: g.GeoIntent(intent=word, modifiers=[]))
+    result = CliRunner().invoke(g.cli, [word])
+    assert result.exit_code != 0 and "未能理解" in result.output
 
 
-@pytest.mark.integration
-@pytest.mark.skipif(os.getenv("GEOASK_MODEL_TESTS") != "1", reason="Set GEOASK_MODEL_TESTS=1 to use/download the real embedding model")
-def test_real_multilingual_model():
-    settings = g.read_settings(g.ROOT / "config.yaml")
-    mapper = g.SemanticMapper(["cafe", "restaurant", "park", "railway_station", "supermarket", "fitness_centre"], settings)
-    assert mapper.match("咖啡").category == "cafe"
-    assert mapper.match("咖啡").similarity > .6
-    assert mapper.match("餐厅").category == "restaurant"
-    assert mapper.match("健身").category == "fitness_centre"
-    assert mapper.match("火锅").category is None
-    assert mapper.match("量子计算机").category is None
+def test_nan_radius_rejected_before_api(monkeypatch):
+    monkeypatch.setattr(g, "parse_intent", lambda *a: pytest.fail("nan reached API"))
+    result = CliRunner().invoke(g.cli, ["去鸟巢", "--radius", "nan"])
+    assert result.exit_code != 0 and "半径" in result.output

@@ -1,6 +1,6 @@
 # HTML 桌面界面
 
-运行 `python geoask_web.py` 或 `geoask-gui`，程序打开独立桌面窗口。Windows 源码用户也可双击 `启动界面.cmd`。`python geoask_gui.py` 同样启动新界面。
+运行 `python geoask_web.py` 或 `geoask-gui`，程序打开独立桌面窗口。Windows 源码用户也可双击 `启动界面.cmd`。
 
 桌面壳使用 pywebview，Windows 使用系统 WebView2 Runtime 渲染 HTML，不会打开外部浏览器；关闭窗口会停止本次本地 HTTP 服务并释放查询引擎。CSV 导出使用系统保存文件对话框。Windows 缺少 WebView2 Runtime 时需先安装该组件；macOS 使用系统 WKWebView，Linux 需要 pywebview 支持的 GTK/WebKit 或 Qt 运行环境。
 
@@ -14,7 +14,7 @@
 
 地图使用蓝色圆形起点、橙红色编号目的地图钉、紫色字母候选标记和棕黄色停车标记，并显示对应图例。查询完成后自动弹出选点窗口，可按站点逐一确认；更换某站后，后续站点重新查询，再继续选择。可通过“行程地点 → 选择行程地点”或各站的“更换地点”重新打开弹窗；点击地图候选也会打开对应选择窗口供确认。
 
-自然语言查询、最多 6 站的候选选择、换点后重查、步行/骑行/驾车路线、停车场查询、设备定位、查询预览与 CSV 导出使用现有 Python 服务。新界面可以通过 `--config 地区.yaml` 使用已有地区配置；地区文件导入工具仍保留在 `geoask_data.py`。原 Tkinter 类 `geoask_gui.GeoaskApp` 保留供旧界面回归测试使用。
+自然语言查询、最多 6 站的候选选择、换点后重查、步行/骑行/驾车路线、停车场查询、设备定位、查询预览与 CSV 导出由 `geoask_service.py` 和高德接口完成。`--config` 只替换起点、底图、高德和语言模型参数；地点与路线仍然来自高德。
 
 ## 启动选项
 
@@ -28,7 +28,7 @@ python geoask_web.py --browser
 
 ## 本地接口
 
-`geoask_web.py` 使用 Python 标准库 HTTP 服务与一个工作线程。查询引擎及数据库连接始终由工作线程持有；网络查询在后台执行，页面轮询任务进度。接口会拒绝并发修改，行程标识阻止旧页面操作新行程。
+`geoask_web.py` 使用 Python 标准库 HTTP 服务与一个工作线程。查询引擎由该工作线程持有；网络查询在后台执行，页面轮询任务进度。接口会拒绝并发修改，行程标识阻止旧页面操作新行程。
 
 - `GET /api/config`：公开配置与密钥是否已配置，不返回密钥。
 - `GET /api/state`、`GET /api/jobs/{id}`：读取行程与任务状态。

@@ -122,20 +122,22 @@ def test_amap_engine_uses_online_pois_and_auto_selects_category(monkeypatch):
         engine.close()
 
 
-def test_cli_amap_dry_run_does_not_load_local_data(monkeypatch):
+def test_cli_amap_dry_run_does_not_call_poi_search(monkeypatch):
     settings = strict_settings()
     monkeypatch.setattr(g, "read_settings", lambda path: settings)
     monkeypatch.setattr(g, "parse_intent",
                         lambda *args, **kwargs: g.GeoIntent(intent="洗浴中心", modifiers=[]))
-    called = False
-
-    def load(*args, **kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("local data must not load in strict Amap mode")
-
-    monkeypatch.setattr(g, "load_data", load)
+    monkeypatch.setattr(amap, "search_pois", lambda *args, **kwargs: pytest.fail("dry-run called Amap"))
     result = CliRunner().invoke(g.cli, ["洗浴中心", "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "高德 place/text" in result.output
-    assert not called
+
+
+def test_unclear_intent_never_searches(monkeypatch):
+    settings = strict_settings()
+    monkeypatch.setattr(g, "read_settings", lambda path: settings)
+    monkeypatch.setattr(g, "resolve_amap_credentials", lambda amap_settings: ("key", "code"))
+    monkeypatch.setattr(g, "parse_intent", lambda *args, **kwargs: g.GeoIntent(intent="不明确", modifiers=[]))
+    monkeypatch.setattr(amap, "search_pois", lambda *args, **kwargs: pytest.fail("unclear intent searched"))
+    with pytest.raises(g.GeoaskError, match="未能理解"):
+        QueryEngine().run(QueryRequest("随便吧", (116.46, 39.92), 1000, 10, Path("config.yaml"), amap=True))

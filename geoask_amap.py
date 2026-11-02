@@ -172,7 +172,7 @@ def search_pois(keywords, center, radius, limit, settings: g.AmapSettings, api_k
 
 def search_places(query, center, radius, limit, settings: g.AmapSettings, api_key,
                   opener=None, security_code=""):
-    """Backward-compatible soft search used only by optional fallback paths."""
+    """Non-strict POI search: a disabled source or transport error returns no rows."""
     return search_pois(query, center, radius, limit, settings, api_key,
                        security_code=security_code, opener=opener, strict=False)
 

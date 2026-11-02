@@ -8,23 +8,17 @@ import sys
 import tempfile
 
 
-def smoke(output: Path, model_cache: Path | None = None):
+def smoke(output: Path):
     import geoask as g
     import geoask_credentials as credentials
-    from geoask_places import search_place
     from geoask_web import WebApp, WebServer, frontend_file, run_desktop
 
     report = {"version": g.__version__, "frozen": bool(getattr(sys, "frozen", False))}
     with tempfile.TemporaryDirectory(prefix="geoask-desktop-smoke-") as folder:
         credentials.connection_file = lambda: Path(folder) / "connection.dat"
         settings = g.read_settings(g.DEFAULT_CONFIG)
-        settings.cache_dir = Path(folder) / "cache"
-        with g.load_data(settings) as con:
-            count = con.execute("SELECT count(*) FROM poi").fetchone()[0]
-            assert count > 0
-            rows = search_place(con, "鸟巢", (116.46, 39.92), 10, settings)
-            assert any(row['name'] == '国家体育场' for row in rows)
-        report.update(poi_rows=count, named_destination=True, spatial=True)
+        assert settings.amap.enabled and settings.amap.primary and settings.routing.provider == "amap"
+        report.update(amap_primary=True)
         credentials.save_connection(settings.llm.model_dump(), settings.map.model_dump(),
                                     settings.routing.model_dump(), "desktop-smoke-not-a-real-key")
         assert credentials.saved_api_key(settings.llm.model_dump()) == "desktop-smoke-not-a-real-key"
@@ -56,11 +50,6 @@ def smoke(output: Path, model_cache: Path | None = None):
             finally:
                 server.shutdown()
                 webapp.close()
-        if model_cache:
-            settings.cache_dir = model_cache.resolve()
-            mapper = g.SemanticMapper(['cafe', 'restaurant', 'park', 'fitness_centre'], settings)
-            assert mapper.match('咖啡').category == 'cafe'
-            report["real_embedding"] = True
         native_app = WebApp()
         native_server = WebServer(native_app)
         def loaded(window):
@@ -108,7 +97,6 @@ def smoke(output: Path, model_cache: Path | None = None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", type=Path)
-    parser.add_argument("--model-cache", type=Path)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
@@ -116,7 +104,7 @@ def main():
     args = parser.parse_args()
     if args.self_test:
         try:
-            smoke(args.self_test, args.model_cache)
+            smoke(args.self_test)
         except Exception:
             import traceback
             args.self_test.write_text(json.dumps({"passed": False, "traceback": traceback.format_exc()},
