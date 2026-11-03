@@ -29,7 +29,7 @@ geoask = "geoask:cli"
 geoask-gui = "geoask_web:main"
 
 [tool.setuptools]
-py-modules = ["geoask", "geoask_service", "geoask_gui", "geoask_web", "geoask_map", "geoask_location", "geoask_routing", "geoask_places", "geoask_data", "geoask_parking", "geoask_runtime", "geoask_credentials", "geoask_amap"]
+py-modules = ["geoask", "geoask_service", "geoask_web", "geoask_location", "geoask_routing", "geoask_parking", "geoask_runtime", "geoask_credentials", "geoask_amap"]
 packages = ["geoask_resources"]
 
 [tool.setuptools.dynamic]
@@ -39,4 +39,3 @@ dependencies = {file = ["requirements.txt"]}
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["integration: real local embedding model or bundled spatial data"]

@@ -45,12 +45,10 @@ def main():
 import json, os
 from pathlib import Path
 import geoask as g
-import geoask_gui
 import geoask_web
 import geoask_credentials
 geoask_credentials.connection_file = lambda: Path('smoke-connection.dat').resolve()
 from importlib.metadata import metadata
-from importlib.resources import files
 package = metadata('geoask')
 assert package['Version'] == g.__version__
 assert package['Description-Content-Type'] == 'text/markdown' and package['License-Expression'] == 'MIT'
@@ -66,6 +64,7 @@ for asset in ('glass.js', 'glass.css', 'vendor/lens/LICENSE.txt', 'vendor/lens/t
 import threading
 from urllib.request import urlopen, Request
 webapp = geoask_web.WebApp()
+assert webapp.settings.amap.primary and webapp.settings.routing.provider == 'amap'
 webserver = geoask_web.WebServer(webapp)
 webthread = threading.Thread(target=webserver.serve_forever, daemon=True)
 webthread.start()
@@ -80,7 +79,8 @@ try:
             assert response.read() == geoask_web.frontend_file(asset).read_bytes(), asset
     request = Request(webserver.origin + '/api/config', headers={'X-Geoask-Token': webapp.token})
     with urlopen(request) as response:
-        assert json.load(response)['version'] == g.__version__
+        payload = json.load(response)
+        assert payload['version'] == g.__version__ and payload['online'] is True
 finally:
     webserver.shutdown()
     webserver.server_close()
@@ -92,23 +92,10 @@ os.environ.pop(local_llm.api_key_env, None)
 geoask_credentials.save_connection(local_llm.model_dump(), settings.map.model_dump(), settings.routing.model_dump(), 'installed-profile-test-key')
 assert g.resolve_api_key(local_llm) == 'installed-profile-test-key'
 geoask_credentials.clear_connection()
-assert not settings.cache_dir.is_relative_to(g.ROOT)
-manifest = json.loads(files('geoask_resources').joinpath('data/manifest.json').read_text())
-with g.load_data(settings) as con:
-    assert con.execute('SELECT count(*) FROM poi').fetchone()[0] == manifest['rows']
 config = json.loads(settings.model_dump_json())
 config['llm']['base_url'] = __import__('sys').argv[1]
-# Exercise bundled local resources without contacting the production Amap API.
-config['amap']['primary'] = False
-config['amap']['enabled'] = False
-config['routing']['provider'] = 'valhalla'
 Path('installed-config.yaml').write_text(__import__('yaml').safe_dump(config), encoding='utf-8')
-if os.name == 'nt' or os.getenv('DISPLAY'):
-    app = geoask_gui.GeoaskApp()
-    app.withdraw()
-    app.update()
-    app.close()
-print('installed resources, spatial data, GUI initialization: OK')
+print('installed resources, Amap configuration and local HTTP API: OK')
 '''
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -134,9 +121,10 @@ print('installed resources, spatial data, GUI initialization: OK')
             env["DEEPSEEK_API_KEY"] = "local-smoke-test"
             run([cli, "--help"])
             run([scripts / ("geoask-gui.exe" if os.name == "nt" else "geoask-gui"), "--help"])
-            output = run([cli, "去国家体育场", "--config", directory / "installed-config.yaml", "--explain"])
-            assert "国家体育场" in output.stdout and "结果 (1 条)" in output.stdout
-            print("installed geoask entry point + local compatible HTTP API + named search: OK")
+            output = run([cli, "去国家体育场", "--config", directory / "installed-config.yaml", "--dry-run", "--explain"])
+            assert "国家体育场" in output.stdout and "高德 place/text" in output.stdout
+            assert "未执行" in output.stdout
+            print("installed geoask entry point + local compatible HTTP API + Amap dry-run: OK")
         finally:
             server.shutdown()
             server.server_close()

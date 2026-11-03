@@ -1,8 +1,8 @@
-"""Local HTML/CSS/JavaScript interface, backed by the existing query engine.
+"""Local HTML/CSS/JavaScript interface, backed by the Amap query engine.
 
 Only loopback connections are accepted. All mutations require a per-process
 token and same-origin requests. Credentials stay in Python, never in HTML or
-browser storage. One worker owns the engine and its database connection.
+browser storage. One worker owns the query engine.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ import webbrowser
 import geoask as g
 import geoask_credentials as credentials
 from geoask_location import get_device_location
+from geoask_runtime import get_logger
 from geoask_parking import parking_route_points
-from geoask_routing import plan_road_route
 from geoask_service import QueryEngine, QueryRequest, route_points
 
 
@@ -126,7 +126,7 @@ class WebApp:
         except Exception as exc:
             safe = isinstance(exc, (g.GeoaskError, credentials.LocalSettingsError))
             if not safe:
-                g.get_logger().error('Web operation failed (%s)', type(exc).__name__)
+                get_logger().error('Web operation failed (%s)', type(exc).__name__)
             with self.lock:
                 self.jobs[job_id] = dict(status='error', error=str(exc) if safe else
                                         '操作未完成，请检查输入或稍后重试。', state=self.state())
@@ -183,11 +183,8 @@ class WebApp:
                 chosen = self.parking.candidates[parking]
                 mode = 'driving'
             self.progress('正在沿真实道路规划路线…')
-            if self.settings.routing.provider == 'amap':
-                from geoask_amap import plan_route
-                route = plan_route(points, mode, self.settings.amap, self.amap_key, self.security_code)
-            else:
-                route = plan_road_route(points, mode, self.settings.routing)
+            from geoask_amap import plan_route
+            route = plan_route(points, mode, self.settings.amap, self.amap_key, self.security_code)
             self.route, self.route_parking = route, chosen
         elif action == 'locate':
             location = get_device_location()
@@ -218,8 +215,9 @@ class WebApp:
             raise g.GeoaskError('请检查接口地址、模型名称与返回格式；接口地址中不要填写密钥。') from None
         # Compare the request layer's canonical host; never reuse a hidden key
         # when the endpoint changes, including Unicode/IDNA host changes.
-        import httpx
-        same = (httpx.URL(llm.base_url) == httpx.URL(self.llm.base_url)
+        # The pinned OpenAI SDK depends on httpx2, which provides this URL type.
+        import httpx2
+        same = (httpx2.URL(llm.base_url) == httpx2.URL(self.llm.base_url)
                 and llm.api_key_env == self.llm.api_key_env)
         def key_field(name, current):
             value = data.get(name)

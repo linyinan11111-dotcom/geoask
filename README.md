@@ -73,4 +73,4 @@ Windows 也可以在安装依赖后双击 `启动界面.cmd`，安装项目后�
 - [项目代码结构与技术架构](docs/项目代码结构与技术架构详解.md)
 - [接口设置与本地密钥保存](docs/api-local-storage.md)
 
-代码采用 [MIT 许可](LICENSE)。在线地图与地点服务由高德地图提供；仓库附带的本地测试数据来自 [Geofabrik](https://download.geofabrik.de/asia/china.html) / © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)，遵循 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)。
+代码采用 [MIT 许可](LICENSE)。在线地图、地点与路线由高德地图提供。界面中的 Lens 光学组件采用 MIT 许可，说明见 `web/vendor/lens/`。

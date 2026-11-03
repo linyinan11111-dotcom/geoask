@@ -1,4 +1,4 @@
-"""Packaged default configuration, OSM samples and device-location helper."""
+"""Packaged default configuration, web UI and device-location helper."""
 from contextlib import ExitStack
 from importlib.resources import as_file, files
 import atexit

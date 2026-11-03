@@ -55,5 +55,5 @@ def test_amap_disabled_does_not_make_request():
         called = True
 
     assert search_places("洗浴中心", (116.46, 39.92), 1000, 10,
-                         g.AmapSettings(), "key", opener) == []
+                         g.AmapSettings(enabled=False), "key", opener) == []
     assert not called
